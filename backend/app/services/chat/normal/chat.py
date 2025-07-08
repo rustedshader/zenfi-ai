@@ -112,7 +112,7 @@ class ChatService:
             formatted_prompt = python_code_needed_decision_prompt.format(
                 user_query=last_message
             )
-            response = await structured_llm.ainvoke(
+            response: PythonSearchNeed = await structured_llm.ainvoke(
                 [
                     SystemMessage(content=formatted_prompt),
                     HumanMessage(content="Does Python Code Generation needed ? "),
@@ -251,9 +251,7 @@ class ChatService:
 
             print("LOG: Python code execution result:", result)
 
-            # Check the actual execution status from the sandbox result
             if hasattr(result, "status") and result.status == "error":
-                # Execution failed, get error details
                 error_message = (
                     result.stderr if hasattr(result, "stderr") else str(result)
                 )
@@ -266,7 +264,6 @@ class ChatService:
                     "previous_python_error": error_message,
                 }
             else:
-                # Execution succeeded
                 result_output = (
                     result.stdout if hasattr(result, "stdout") else str(result)
                 )
@@ -291,77 +288,15 @@ class ChatService:
                 "previous_python_error": str(e),
             }
 
-    async def call_tools(self, state: AppState):
-        """
-        This node invokes the LLM with tools. If the LLM decides to call a tool,
-        it will return an AIMessage with tool_calls. We append this message to
-        our state.
-        """
-        print("LOG: Checking for potential tool calls...")
-        messages = state["messages"]
-        last_message = next(
-            (msg for msg in reversed(messages) if isinstance(msg, HumanMessage)),
-            None,
-        )
-
-        # Build a string describing the available tools and their signatures
-        tool_args = ", ".join(
-            [
-                f"{getattr(tool, '__name__', getattr(tool, 'name', str(tool)))}({', '.join(getattr(tool, '__annotations__', {}).keys())})"
-                for tool in self.tools
-            ]
-        )
-        print(tool_args)
-
-        formatted_system_prompt = tool_executor_system_instructions.format(
-            user_query=last_message.content, tool_args=tool_args
-        )
-        response = await self.llm_with_tools.ainvoke(
-            messages
-            + [
-                SystemMessage(content=formatted_system_prompt),
-                HumanMessage(content="Generate response with tools"),
-            ],
-        )
-        print("LOG: Tool calling LLM response:", response)
-
-        # Append the response to the history of messages
-        # This is the crucial step.
-        return {"messages": messages + [response]}
-
-    def should_call_tools(self, state: AppState) -> str:
-        """
-        Determines whether to call tools or end the chain.
-        """
-        print("LOG: Checking if the last message contains tool calls...")
-        last_message = state["messages"][-1]
-
-        # If the last message is an AIMessage and has tool_calls, route to tool_node
-        if (
-            isinstance(last_message, AIMessage)
-            and hasattr(last_message, "tool_calls")
-            and len(last_message.tool_calls) > 0
-        ):
-            print("LOG: Routing to tool node.")
-            return "tool_node"
-
-        # Otherwise, route to the final model call
-        print("LOG: No tool calls found, routing to final model.")
-        return "call_model"
-
     def should_retry_python_code(self, state: AppState) -> str:
-        """
-        Determines whether to retry Python code generation or proceed to tools.
-        """
         execution_result = state.get("execution_result")
         retry_count = state.get("python_retry_count", 0)
-        max_retries = state.get("max_python_retries", 2)  # Default max retries
+        max_retries = state.get("max_python_retries", 4)
 
         print(
             f"LOG: Checking retry condition - Status: {execution_result.status if execution_result else 'None'}, Retry count: {retry_count}, Max retries: {max_retries}"
         )
 
-        # If execution failed and we haven't exceeded max retries, retry
         if (
             execution_result
             and execution_result.status == ExecutionStatus.ERROR
@@ -370,9 +305,47 @@ class ChatService:
             print("LOG: Retrying Python code generation")
             return "regenerate_python_code"
 
-        # Otherwise, proceed to tools
         print("LOG: Proceeding to tools")
         return "call_tools"
+
+    async def call_tools(self, state: AppState):
+        print("----------------------Checking Tool Calls---------------------")
+        messages = state["messages"]
+        last_message = next(
+            (msg for msg in reversed(messages) if isinstance(msg, HumanMessage)),
+            None,
+        )
+
+        formatted_system_prompt = tool_executor_system_instructions.format(
+            user_query=last_message.content
+        )
+        response = await self.llm_with_tools.ainvoke(
+            messages
+            + [
+                SystemMessage(content=formatted_system_prompt),
+                HumanMessage(content="Generate response with tools"),
+            ],
+        )
+        response.content = ""
+        print("---------------------Tool Calls Response---------------------")
+        print(response)
+        print("-----------------------------------------------------")
+        return {"messages": messages + [response]}
+
+    def should_call_tools(self, state: AppState) -> str:
+        print("LOG: Checking if the last message contains tool calls...")
+        last_message = state["messages"][-1]
+
+        if (
+            isinstance(last_message, AIMessage)
+            and hasattr(last_message, "tool_calls")
+            and len(last_message.tool_calls) > 0
+        ):
+            print("LOG: Routing to tool node.")
+            return "tool_node"
+
+        print("LOG: No tool calls found, routing to final model.")
+        return "call_model"
 
     async def call_model(self, state: AppState):
         print("LOG: Calling the model with current state...")
@@ -398,7 +371,6 @@ class ChatService:
         python_code = state.get("python_code", "")
         python_execution_result = state.get("execution_result", "")
         tools_response_content = tools_response.content if tools_response else ""
-        print("Tools Response:", tools_response_content)
 
         formatted_system_prompt = SYSTEM_INSTRUCTIONS.format(
             user_query=last_message.content,
@@ -406,6 +378,7 @@ class ChatService:
             python_execution_result=python_execution_result,
             tools_response=tools_response_content,
         )
+
         response_stream = self.llm.astream(
             [
                 SystemMessage(content=formatted_system_prompt),
@@ -423,11 +396,7 @@ class ChatService:
         builder.add_node("generate_python_code", self.generate_python_code)
         builder.add_node("regenerate_python_code", self.regenerate_python_code)
         builder.add_node("execute_python_code", self.execute_python_code)
-
-        # This node now correctly appends the AIMessage to the state
         builder.add_node("call_tools", self.call_tools)
-
-        # This is the prebuilt ToolNode
         builder.add_node("tool_node", self.tool_executor)
 
         builder.add_edge(START, "check_python_code_needed")
@@ -442,8 +411,6 @@ class ChatService:
         builder.add_conditional_edges("check_python_code_needed", after_python_check)
         builder.add_edge("generate_python_code", "execute_python_code")
         builder.add_edge("regenerate_python_code", "execute_python_code")
-
-        # Add conditional edge after python execution to decide retry or proceed
         builder.add_conditional_edges(
             "execute_python_code",
             self.should_retry_python_code,
@@ -452,23 +419,15 @@ class ChatService:
                 "call_tools": "call_tools",
             },
         )
-
-        # *** REVISED TOOL EXECUTION FLOW ***
-        # After calling the tool-enabled LLM, we use our new conditional function
         builder.add_conditional_edges(
             "call_tools",
-            self.should_call_tools,  # Use the new function here
+            self.should_call_tools,
             {
                 "tool_node": "tool_node",
                 "call_model": "call_model",
             },
         )
-
-        # After the ToolNode executes, the ToolMessages are added to the state.
-        # We can now pass this full context to the final model to generate a response.
         builder.add_edge("tool_node", "call_model")
-
-        # The final model call ends the graph run
         builder.add_edge("call_model", END)
 
         self.graph = builder.compile(checkpointer=checkpointer)
@@ -545,40 +504,25 @@ class ChatService:
     async def stream_response(
         self, messages: List[ClientMessage], protocol: str = "data"
     ):
+        print(
+            "--------------------------------------------STARTING STREAM--------------------------------------"
+        )
         if protocol == "text":
             langchain_messages = self._convert_message_to_langchain_format(messages)
             self.build_graph(checkpointer=None)
-            state = AppState(
-                messages=langchain_messages,
-                needs_portfolio=False,
-                needs_knowledge_base=False,
-                needs_python_code=False,
-                needs_web_search=False,
-                search_queries=[],
-                search_sufficient=False,
-                summary=None,
-                python_code=None,
-                execution_result=None,
-                knowledge_base_results=None,
-                source_str=None,
-                search_iterations=0,
-                portfolio_data=None,
-                has_tool_calls=False,
-                tools_executed=False,
-                tools_response=None,
-                python_retry_count=0,
-                max_python_retries=2,
-                previous_python_error=None,
-            )
+            state = AppState(messages=langchain_messages)
+            last_yielded_content = None
             async for chunk in self.graph.astream_events(state):
+                print(chunk)
                 if chunk.get("event") == "on_chain_stream":
                     if (
                         chunk["data"].get("chunk")
                         and "messages" in chunk["data"]["chunk"]
                     ):
                         if len(chunk["data"]["chunk"]["messages"]) > 0:
-                            if isinstance(
-                                chunk["data"]["chunk"]["messages"][0], AIMessageChunk
-                            ):
-                                print(chunk["data"]["chunk"]["messages"][0])
-                                yield chunk["data"]["chunk"]["messages"][0].content
+                            message_chunk = chunk["data"]["chunk"]["messages"][0]
+                            if isinstance(message_chunk, AIMessageChunk):
+                                content = message_chunk.content
+                                if content != last_yielded_content:
+                                    yield content
+                                    last_yielded_content = content

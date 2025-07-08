@@ -65,23 +65,8 @@ class PythonExecutionResult(BaseModel):
 class AppState(TypedDict):
     messages: Annotated[list, add_messages]
     needs_python_code: Optional[bool]
-    needs_web_search: Optional[bool]
-    search_queries: list[SearchQuery]
-    search_sufficient: Optional[bool]
-    summary: Optional[str]
     python_code: Optional[str]
     execution_result: Optional[PythonExecutionResult]
-    source_str: Optional[str] = None
-    search_iterations: int
-    tools_response: Optional[str]
-    # Retry related fields
     python_retry_count: int
     max_python_retries: int
     previous_python_error: Optional[str]
-    # Additional fields that might be needed
-    needs_portfolio: Optional[bool]
-    needs_knowledge_base: Optional[bool]
-    knowledge_base_results: Optional[str]
-    portfolio_data: Optional[str]
-    has_tool_calls: Optional[bool]
-    tools_executed: Optional[bool]

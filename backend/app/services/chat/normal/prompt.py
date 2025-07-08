@@ -56,12 +56,6 @@ tool_executor_system_instructions = """
 {user_query}
 </User Query>
 
-
-<Tool Arguments>
-{tool_args}
-</Tool Arguments>
-
-
 <Instructions>
 You are an expert financial AI assistant with access to a set of tools. 
 - Use the provided tools and their arguments to answer the query directly.
