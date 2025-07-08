@@ -41,11 +41,11 @@ from .prompt import (
     SYSTEM_INSTRUCTIONS,
     python_code_generation_prompt,
     python_code_needed_decision_prompt,
+    tool_exectutor_system_instructions,
 )
 from langgraph.graph import StateGraph, END, START
 from app.types.chat.normal import (
     AppState,
-    PythonCodeState,
     PythonCode,
     PythonSearchNeed,
     PythonExecutionResult,
@@ -61,7 +61,6 @@ class ChatService:
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash", google_api_key=GEMINI_API_KEY
         )
-        self.system_prompt = SystemMessage(content=SYSTEM_INSTRUCTIONS)
         self.tools = [
             get_stock_currency,
             get_stock_day_high,
@@ -91,16 +90,8 @@ class ChatService:
             get_stock_percentage_change,
             get_stock_price_change,
         ]
-        self.llm_with_tools = self.llm.bind_tools(self.tools)
         self.tool_executor = ToolNode(self.tools)
-
-    async def call_model(self, state: AppState):
-        llm_messages = [self.system_prompt]
-        llm_messages.extend(state["messages"])
-        response_stream = self.llm_with_tools.astream(llm_messages)
-        async for response in response_stream:
-            use_tool = hasattr(response, "tool_calls") and len(response.tool_calls) > 0
-            yield {"messages": [response], "use_tool": use_tool}
+        self.llm_with_tools = self.llm.bind_tools(self.tools)
 
     async def check_python_code_needed(self, state: AppState):
         try:
@@ -129,25 +120,19 @@ class ChatService:
 
             needs_python_code = getattr(response, "needs_python_code", False)
 
-            python_subgraph_state = None
             if needs_python_code:
-                python_subgraph_state = PythonCodeState(
-                    messages=state["messages"],
-                    python_code=None,
-                    execution_result=None,
-                    code_generation_attempts=0,
-                    max_attempts=3,
-                )
+                return {
+                    "needs_python_code": needs_python_code,
+                }
 
             return {
                 "needs_python_code": needs_python_code,
-                "python_subgraph_state": python_subgraph_state,
             }
         except Exception as e:
             print(f"Error in check_python_code_needed: {e}")
             return {"needs_python_code": False, "python_subgraph_state": None}
 
-    async def generate_python_code(self, state: PythonCodeState):
+    async def generate_python_code(self, state: AppState):
         print("LOG: Generating Python Code...")
         try:
             last_message = next(
@@ -185,7 +170,7 @@ class ChatService:
                 "python_code": None,
             }
 
-    async def execute_python_code(self, state: PythonCodeState):
+    async def execute_python_code(self, state: AppState):
         try:
             python_code = state.get("python_code")
             if not python_code:
@@ -231,52 +216,142 @@ class ChatService:
                 )
             }
 
-    def build_python_code_subgraph(self):
-        python_builder = StateGraph(PythonCodeState)
-        print("Building Python code subgraph...")
+    # FIXED: This method now properly handles tool calling
+    async def call_tools(self, state: AppState):
+        print("LOG: Calling tools...")
+        try:
+            last_message = next(
+                (
+                    msg
+                    for msg in reversed(state["messages"])
+                    if isinstance(msg, HumanMessage)
+                ),
+                None,
+            )
+            if last_message is None:
+                raise ValueError("No HumanMessage found in messages.")
 
-        python_builder.add_node("generate_python_code", self.generate_python_code)
-        python_builder.add_node("execute_python_code", self.execute_python_code)
+            structured_system_prompt = tool_exectutor_system_instructions.format(
+                query=last_message.content
+            )
 
-        python_builder.add_edge(START, "generate_python_code")
+            # Get the AI response with tool calls
+            response = await self.llm_with_tools.ainvoke(
+                [
+                    SystemMessage(content=structured_system_prompt),
+                    HumanMessage(content=last_message.content),
+                ]
+            )
 
-        python_builder.add_conditional_edges(
-            "generate_python_code",
-            lambda state: state.get("python_code") is not None,
-            {True: "execute_python_code", False: END},
+            print(response)
+
+            # Add the AI response to messages
+            updated_messages = state["messages"] + [response]
+
+            # Check if there are tool calls
+            if hasattr(response, "tool_calls") and response.tool_calls:
+                print(f"LOG: Found {len(response.tool_calls)} tool calls")
+                return {
+                    "messages": updated_messages,
+                    "has_tool_calls": True,
+                }
+            else:
+                print("LOG: No tool calls found")
+                return {
+                    "messages": updated_messages,
+                    "has_tool_calls": False,
+                    "tools_response": response.content,
+                }
+
+        except Exception as e:
+            print(f"Error in call_tools: {e}")
+            return {
+                "has_tool_calls": False,
+                "tools_response": None,
+            }
+
+    # NEW: This method executes the actual tools
+    async def execute_tools(self, state: AppState):
+        print("LOG: Executing tools...")
+        try:
+            # The ToolNode expects the state to contain messages with tool calls
+            result = await self.tool_executor.ainvoke(state)
+
+            # Add tool results to messages
+            updated_messages = state["messages"] + result.get("messages", [])
+
+            return {
+                "messages": updated_messages,
+                "tools_executed": True,
+            }
+        except Exception as e:
+            print(f"Error in execute_tools: {e}")
+            return {
+                "tools_executed": False,
+                "tools_response": f"Error executing tools: {str(e)}",
+            }
+
+    async def call_model(self, state: AppState):
+        print("LOG: Calling the model with current state...")
+        last_message = next(
+            (
+                msg
+                for msg in reversed(state["messages"])
+                if isinstance(msg, HumanMessage)
+            ),
+            None,
         )
 
-        python_builder.add_edge("execute_python_code", END)
+        # Get the context from state
+        python_code = state.get("python_code", "")
+        python_execution_result = state.get("execution_result", "")
+        tools_response = state.get("tools_response", "")
 
-        return python_builder.compile()
+        formatted_system_prompt = SYSTEM_INSTRUCTIONS.format(
+            user_query=last_message.content,
+            python_code=python_code,
+            python_execution_result=python_execution_result,
+            tools_response=tools_response,
+        )
+
+        # Use the full conversation history for context
+        messages_for_model = [SystemMessage(content=formatted_system_prompt)] + state[
+            "messages"
+        ]
+
+        response_stream = self.llm.astream(messages_for_model)
+        async for response in response_stream:
+            yield {"messages": [response]}
 
     def build_graph(self, checkpointer):
         builder = StateGraph(AppState)
 
-        python_code_subgraph = self.build_python_code_subgraph()
-
         builder.add_node("call_model", self.call_model)
-        builder.add_node("tool_node", self.tool_executor)
         builder.add_node("check_python_code_needed", self.check_python_code_needed)
-        builder.add_node("python_code_subgraph", python_code_subgraph)
+        builder.add_node("generate_python_code", self.generate_python_code)
+        builder.add_node("execute_python_code", self.execute_python_code)
+        builder.add_node("call_tools", self.call_tools)
+        builder.add_node("execute_tools", self.execute_tools)
 
-        builder.add_edge(START, "call_model")
-
-        builder.add_conditional_edges(
-            "call_model",
-            lambda state: state.get("use_tool", False),
-            {True: "tool_node", False: "check_python_code_needed"},
-        )
-
-        builder.add_edge("tool_node", "call_model")
-
+        builder.add_edge(START, "check_python_code_needed")
         builder.add_conditional_edges(
             "check_python_code_needed",
-            lambda state: state.get("needs_python_code", False),
-            {True: "python_code_subgraph", False: END},
+            lambda state: "generate_python_code"
+            if state.get("needs_python_code", False)
+            else "call_tools",
+        )
+        builder.add_edge("generate_python_code", "execute_python_code")
+        builder.add_edge("execute_python_code", "call_tools")
+
+        builder.add_conditional_edges(
+            "call_tools",
+            lambda state: "execute_tools"
+            if state.get("has_tool_calls", False)
+            else "call_model",
         )
 
-        builder.add_edge("python_code_subgraph", END)
+        builder.add_edge("execute_tools", "call_model")
+        builder.add_edge("call_model", END)
 
         self.graph = builder.compile(checkpointer=checkpointer)
 
@@ -370,7 +445,9 @@ class ChatService:
                 source_str=None,
                 search_iterations=0,
                 portfolio_data=None,
-                python_subgraph_state=None,
+                has_tool_calls=False,
+                tools_executed=False,
+                tools_response=None,
             )
             async for chunk in self.graph.astream_events(state):
                 if chunk.get("event") == "on_chain_stream":
@@ -378,7 +455,8 @@ class ChatService:
                         chunk["data"].get("chunk")
                         and "messages" in chunk["data"]["chunk"]
                     ):
-                        if isinstance(
-                            chunk["data"]["chunk"]["messages"][0], AIMessageChunk
-                        ):
-                            yield chunk["data"]["chunk"]["messages"][0].content
+                        if len(chunk["data"]["chunk"]["messages"]) > 0:
+                            if isinstance(
+                                chunk["data"]["chunk"]["messages"][0], AIMessageChunk
+                            ):
+                                yield chunk["data"]["chunk"]["messages"][0].content

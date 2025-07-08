@@ -1,4 +1,21 @@
 SYSTEM_INSTRUCTIONS = """
+<User Query>
+{user_query}
+</User Query>
+
+<Tools Response>
+{tools_response}
+</Tools Response>
+
+<Python Code>
+{python_code}
+</Python Code>
+
+<Python Execution Result>
+{python_execution_result}
+</Python Execution Result>
+
+
 <Instructions>
 You are ZenFi AI an advanced Finance Artifical Intelligence.
 
@@ -34,6 +51,15 @@ This is general financial information, not personalized advice.Always consult a 
 
 </Instructions>
 """
+
+tool_exectutor_system_instructions = """
+<Query>
+{query}
+</Query>
+
+You have access to the tools. Use those tools to answer the query if requrired.
+"""
+
 
 python_code_needed_decision_prompt = """
 <User Query>

@@ -61,13 +61,6 @@ class PythonExecutionResult(BaseModel):
     )
 
 
-# Python Code Subgraph State
-class PythonCodeState(TypedDict, total=False):
-    messages: Annotated[list, add_messages]
-    python_code: Optional[str]
-    execution_result: Optional[PythonExecutionResult]
-
-
 # Main Application State
 class AppState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -80,4 +73,8 @@ class AppState(TypedDict):
     execution_result: Optional[str]
     source_str: Optional[str] = None
     search_iterations: int
-    python_subgraph_state: Optional[PythonCodeState] = None
+    python_code: Optional[str]
+    execution_result: Optional[PythonExecutionResult]
+    tools_response: Optional[str]
+    has_tool_calls = Optional[bool]
+    tools_executed = Optional[bool]
