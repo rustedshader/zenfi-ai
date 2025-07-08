@@ -40,6 +40,17 @@ class PythonCode(BaseModel):
     )
 
 
+class AdditionalToolsNeed(BaseModel):
+    needs_additional_tools: Optional[bool] = Field(
+        default=False,
+        description="Whether additional tool calls are needed to provide a complete answer.",
+    )
+    reasoning: Optional[str] = Field(
+        None,
+        description="Explanation of why additional tools are needed or not needed.",
+    )
+
+
 class ExecutionStatus(str, Enum):
     SUCCESS = "success"
     ERROR = "error"
@@ -70,3 +81,6 @@ class AppState(TypedDict):
     python_retry_count: int
     max_python_retries: int
     previous_python_error: Optional[str]
+    tool_retry_count: int
+    max_tool_retries: int
+    needs_additional_tools: Optional[bool]

@@ -45,6 +45,7 @@ from .prompt import (
     python_code_needed_decision_prompt,
     python_code_retry_prompt,
     tool_executor_system_instructions,
+    additional_tools_decision_prompt,
 )
 from langgraph.graph import StateGraph, END, START
 from app.types.chat.normal import (
@@ -53,6 +54,7 @@ from app.types.chat.normal import (
     PythonSearchNeed,
     PythonExecutionResult,
     ExecutionStatus,
+    AdditionalToolsNeed,
 )
 from app.types.api import ClientMessage
 from langgraph.prebuilt import ToolNode
@@ -351,7 +353,47 @@ class ChatService:
 
     async def call_model(self, state: AppState):
         print("LOG: Calling the model with current state...")
-        print("App State", state)
+        last_message = next(
+            (
+                msg
+                for msg in reversed(state["messages"])
+                if isinstance(msg, HumanMessage)
+            ),
+            None,
+        )
+
+        tools_response = next(
+            (
+                msg
+                for msg in reversed(state["messages"])
+                if isinstance(msg, ToolMessage)
+            ),
+            None,
+        )
+
+        python_code = state.get("python_code", "")
+        python_execution_result = state.get("execution_result", "")
+        tools_response_content = tools_response.content if tools_response else ""
+
+        formatted_system_prompt = SYSTEM_INSTRUCTIONS.format(
+            user_query=last_message.content,
+            python_code=python_code,
+            python_execution_result=python_execution_result,
+            tools_response=tools_response_content,
+        )
+
+        response = await self.llm.ainvoke(
+            [
+                SystemMessage(content=formatted_system_prompt),
+                HumanMessage(content=last_message.content),
+            ]
+        )
+
+        return {"messages": [response]}
+
+    async def final_response(self, state: AppState):
+        """Generate the final streaming response after all tool calls are complete."""
+        print("LOG: Generating final streaming response...")
         last_message = next(
             (
                 msg
@@ -390,17 +432,166 @@ class ChatService:
         async for response in response_stream:
             yield {"messages": [response]}
 
+    async def check_additional_tools_needed(self, state: AppState):
+        """Check if additional tool calls are needed based on current tool responses and AI response."""
+        try:
+            print("LOG: Checking if additional tools are needed...")
+
+            last_message = next(
+                (
+                    msg
+                    for msg in reversed(state["messages"])
+                    if isinstance(msg, HumanMessage)
+                ),
+                None,
+            )
+
+            if last_message is None:
+                return {"needs_additional_tools": False}
+
+            # Get all tool responses
+            tool_responses = [
+                msg for msg in state["messages"] if isinstance(msg, ToolMessage)
+            ]
+
+            # Get the most recent AI response
+            current_ai_response = next(
+                (
+                    msg
+                    for msg in reversed(state["messages"])
+                    if isinstance(msg, AIMessage)
+                ),
+                None,
+            )
+
+            tool_responses_content = (
+                "\n".join(
+                    [
+                        f"Tool: {msg.name if hasattr(msg, 'name') else 'Unknown'}\nResponse: {msg.content}"
+                        for msg in tool_responses[
+                            -3:
+                        ]  # Only check last 3 tool responses to avoid token limits
+                    ]
+                )
+                if tool_responses
+                else "No tool responses available"
+            )
+
+            current_response_content = (
+                current_ai_response.content
+                if current_ai_response
+                else "No AI response available"
+            )
+
+            structured_llm = self.llm.with_structured_output(AdditionalToolsNeed)
+            formatted_prompt = additional_tools_decision_prompt.format(
+                user_query=last_message.content,
+                tool_responses=tool_responses_content,
+                current_response=current_response_content,
+            )
+
+            response: AdditionalToolsNeed = await structured_llm.ainvoke(
+                [
+                    SystemMessage(content=formatted_prompt),
+                    HumanMessage(content="Do we need additional tool calls?"),
+                ]
+            )
+
+            needs_additional_tools = getattr(response, "needs_additional_tools", False)
+            reasoning = getattr(response, "reasoning", "No reasoning provided")
+
+            print(f"LOG: Additional tools needed: {needs_additional_tools}")
+            print(f"LOG: Reasoning: {reasoning}")
+
+            return {
+                "needs_additional_tools": needs_additional_tools,
+            }
+
+        except Exception as e:
+            print(f"Error in check_additional_tools_needed: {e}")
+            return {"needs_additional_tools": False}
+
+    def should_retry_tools(self, state: AppState) -> str:
+        """Determine if we should call tools again or finish."""
+        needs_additional_tools = state.get("needs_additional_tools", False)
+        tool_retry_count = state.get("tool_retry_count", 0)
+        max_tool_retries = state.get(
+            "max_tool_retries", 2
+        )  # Default max 2 additional tool calls
+
+        print(
+            f"LOG: Tool retry check - Needs additional: {needs_additional_tools}, "
+            f"Retry count: {tool_retry_count}, Max retries: {max_tool_retries}"
+        )
+
+        if needs_additional_tools and tool_retry_count < max_tool_retries:
+            print("LOG: Calling tools again")
+            return "call_tools_retry"
+
+        print("LOG: Finishing response")
+        return "finish"
+
+    async def call_tools_retry(self, state: AppState):
+        """Call tools again with updated context for additional information."""
+        print("LOG: Calling tools again for additional information...")
+
+        messages = state["messages"]
+        last_message = next(
+            (msg for msg in reversed(messages) if isinstance(msg, HumanMessage)),
+            None,
+        )
+
+        # Enhanced system prompt for retry calls
+        retry_system_prompt = f"""
+        {tool_executor_system_instructions.format(user_query=last_message.content)}
+        
+        IMPORTANT: Previous tool calls have been made but additional information is needed. 
+        Consider:
+        1. Searching for more recent or comprehensive information
+        2. Using different search terms or approaches
+        3. Looking for additional context that might be missing
+        4. Exploring related topics that could enhance the answer
+        """
+
+        response = await self.llm_with_tools.ainvoke(
+            messages
+            + [
+                SystemMessage(content=retry_system_prompt),
+                HumanMessage(
+                    content="Generate additional tool calls for more comprehensive information"
+                ),
+            ],
+        )
+
+        response.content = ""
+        print("LOG: Additional tool calls generated")
+
+        # Increment retry count
+        current_retry_count = state.get("tool_retry_count", 0)
+
+        return {
+            "messages": messages + [response],
+            "tool_retry_count": current_retry_count + 1,
+        }
+
     def build_graph(self, checkpointer):
         builder = StateGraph(AppState)
 
+        # Add all nodes
         builder.add_node("call_model", self.call_model)
         builder.add_node("check_python_code_needed", self.check_python_code_needed)
         builder.add_node("generate_python_code", self.generate_python_code)
         builder.add_node("regenerate_python_code", self.regenerate_python_code)
         builder.add_node("execute_python_code", self.execute_python_code)
         builder.add_node("call_tools", self.call_tools)
+        builder.add_node("call_tools_retry", self.call_tools_retry)
         builder.add_node("tool_node", self.tool_executor)
+        builder.add_node(
+            "check_additional_tools_needed", self.check_additional_tools_needed
+        )
+        builder.add_node("final_response", self.final_response)
 
+        # Start with python code check
         builder.add_edge(START, "check_python_code_needed")
 
         def after_python_check(state):
@@ -410,6 +601,7 @@ class ChatService:
                 else "call_tools"
             )
 
+        # Python code flow
         builder.add_conditional_edges("check_python_code_needed", after_python_check)
         builder.add_edge("generate_python_code", "execute_python_code")
         builder.add_edge("regenerate_python_code", "execute_python_code")
@@ -421,6 +613,8 @@ class ChatService:
                 "call_tools": "call_tools",
             },
         )
+
+        # Tools flow
         builder.add_conditional_edges(
             "call_tools",
             self.should_call_tools,
@@ -429,8 +623,35 @@ class ChatService:
                 "call_model": "call_model",
             },
         )
+
+        # Tool retry flow
+        builder.add_conditional_edges(
+            "call_tools_retry",
+            self.should_call_tools,
+            {
+                "tool_node": "tool_node",
+                "call_model": "call_model",
+            },
+        )
+
+        # After tool execution, go to model
         builder.add_edge("tool_node", "call_model")
-        builder.add_edge("call_model", END)
+
+        # After model response, check if additional tools are needed
+        builder.add_edge("call_model", "check_additional_tools_needed")
+
+        # Conditional routing based on additional tools check
+        builder.add_conditional_edges(
+            "check_additional_tools_needed",
+            self.should_retry_tools,
+            {
+                "call_tools_retry": "call_tools_retry",
+                "finish": "final_response",
+            },
+        )
+
+        # Final response ends the graph
+        builder.add_edge("final_response", END)
 
         self.graph = builder.compile(checkpointer=checkpointer)
 
@@ -512,10 +733,13 @@ class ChatService:
         if protocol == "text":
             langchain_messages = self._convert_message_to_langchain_format(messages)
             self.build_graph(checkpointer=None)
-            state = AppState(messages=langchain_messages)
+            state = AppState(
+                messages=langchain_messages,
+                tool_retry_count=0,
+                max_tool_retries=2,  # Allow up to 2 additional tool calls
+            )
             last_yielded_content = None
             async for chunk in self.graph.astream_events(state):
-                print(chunk)
                 if chunk.get("event") == "on_chain_stream":
                     if (
                         chunk["data"].get("chunk")

@@ -397,3 +397,37 @@ import numpy as np
 </Libraries Specific Instructions>
 </Instruction>
 """
+
+additional_tools_decision_prompt = """
+<User Query>
+{user_query}
+</User Query>
+
+<Previous Tool Responses>
+{tool_responses}
+</Previous Tool Responses>
+
+<Current AI Response>
+{current_response}
+</Current AI Response>
+
+<Instructions>
+You are an expert decision maker who determines whether the current tool responses and AI response are sufficient to completely answer the user's query, or if additional tool calls are needed.
+
+<Task>
+Analyze whether the current tool responses provide enough information to fully satisfy the user's query. Consider:
+1. Is the information complete and comprehensive?
+2. Are there any gaps in the data that require additional searches or tool calls?
+3. Would additional context or recent information improve the answer quality?
+4. Does the user's query have multiple aspects that haven't been fully addressed?
+
+If ANY of these factors suggest that additional tool calls would significantly improve the response quality, respond with *True*. Otherwise, respond with *False*.
+</Task>
+
+<Decision Criteria>
+Respond only with *True* or *False*.
+- True: If additional tool calls would provide valuable missing information
+- False: If the current tool responses are sufficient to answer the query comprehensively
+</Decision Criteria>
+</Instructions>
+"""
