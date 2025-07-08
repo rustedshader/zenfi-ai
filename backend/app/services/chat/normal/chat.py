@@ -1,4 +1,5 @@
 from typing import List
+import time
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.settings.config import GEMINI_API_KEY
 from app.utils.tools.finance.stock_tools import (
@@ -36,11 +37,23 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
 )
-from .prompt import SYSTEM_INSTRUCTIONS
+from .prompt import (
+    SYSTEM_INSTRUCTIONS,
+    python_code_generation_prompt,
+    python_code_needed_decision_prompt,
+)
 from langgraph.graph import StateGraph, END, START
-from app.types.chat.normal import AppState
+from app.types.chat.normal import (
+    AppState,
+    PythonCodeState,
+    PythonCode,
+    PythonSearchNeed,
+    PythonExecutionResult,
+    ExecutionStatus,
+)
 from app.types.api import ClientMessage
 from langgraph.prebuilt import ToolNode
+from langchain_sandbox import PyodideSandbox
 
 
 class ChatService:
@@ -89,19 +102,168 @@ class ChatService:
             use_tool = hasattr(response, "tool_calls") and len(response.tool_calls) > 0
             yield {"messages": [response], "use_tool": use_tool}
 
+    async def check_python_code_needed(self, state: AppState):
+        try:
+            last_message = state["messages"][-1]
+            structured_llm = self.llm.with_structured_output(PythonSearchNeed)
+            formatted_prompt = python_code_needed_decision_prompt.format(
+                user_query=last_message
+            )
+            response = await structured_llm.ainvoke(
+                [
+                    SystemMessage(content=formatted_prompt),
+                    HumanMessage(content="Does Python Code Generation needed ? "),
+                ]
+            )
+            print("LOG:", response.needs_python_code)
+
+            needs_python_code = getattr(response, "needs_python_code", False)
+
+            # Initialize Python subgraph state if needed
+            python_subgraph_state = None
+            if needs_python_code:
+                python_subgraph_state = PythonCodeState(
+                    messages=state["messages"],
+                    python_code=None,
+                    execution_result=None,
+                    code_generation_attempts=0,
+                    max_attempts=3,
+                )
+
+            return {
+                "needs_python_code": needs_python_code,
+                "python_subgraph_state": python_subgraph_state,
+            }
+        except Exception as e:
+            print(f"Error in check_python_code_needed: {e}")
+            return {"needs_python_code": False, "python_subgraph_state": None}
+
+    # Python Code Subgraph Functions
+    async def generate_python_code(self, state: PythonCodeState):
+        print(state)
+        print("LOG: Generating Python Code...")
+        try:
+            last_message = state["messages"][-1]
+            print("LOG: Attempting to generate Python code...")
+            structured_llm = self.llm.with_structured_output(PythonCode)
+            formatted_prompt = python_code_generation_prompt.format(
+                user_query=last_message.content
+            )
+
+            response = await structured_llm.ainvoke(
+                [
+                    SystemMessage(content=formatted_prompt),
+                    HumanMessage(content="Generate Python code."),
+                ]
+            )
+
+            python_code = getattr(response, "code", None)
+            print("LOG: Generated Python Code:", python_code)
+
+            return {
+                "python_code": python_code,
+            }
+
+        except Exception as e:
+            print(f"Error in generate_python_code: {e}")
+            return {
+                "python_code": None,
+            }
+
+    async def execute_python_code(self, state: PythonCodeState):
+        try:
+            python_code = state.get("python_code")
+            if not python_code:
+                print("LOG: No code provided for execution.")
+                return {
+                    "execution_result": PythonExecutionResult(
+                        status=ExecutionStatus.ERROR, error="No code provided"
+                    )
+                }
+
+            start_time = time.time()
+
+            sandbox = PyodideSandbox(allow_net=True)
+            result = await sandbox.execute(python_code)
+            execution_time = time.time() - start_time
+
+            print("LOG: Python code execution result:", result)
+
+            return {
+                "execution_result": PythonExecutionResult(
+                    status=ExecutionStatus.SUCCESS,
+                    result=str(result),
+                    execution_time=execution_time,
+                )
+            }
+        except Exception as e:
+            execution_time = (
+                time.time() - start_time if "start_time" in locals() else None
+            )
+            print(f"LOG: Error during Python code execution: {e}")
+            return {
+                "execution_result": PythonExecutionResult(
+                    status=ExecutionStatus.ERROR,
+                    error=str(e),
+                    execution_time=execution_time,
+                )
+            }
+
+    def build_python_code_subgraph(self):
+        """Build the Python code generation subgraph"""
+        python_builder = StateGraph(PythonCodeState)
+        print("Building Python code subgraph...")
+
+        # Add nodes for Python code generation
+        python_builder.add_node("generate_python_code", self.generate_python_code)
+        python_builder.add_node("execute_python_code", self.execute_python_code)
+
+        # Define the flow within the subgraph
+        python_builder.add_edge(START, "generate_python_code")
+
+        # Conditional edge based on code generation success
+        python_builder.add_conditional_edges(
+            "generate_python_code",
+            lambda state: state.get("python_code") is not None,
+            {True: "execute_python_code", False: END},
+        )
+
+        python_builder.add_edge("execute_python_code", END)
+
+        return python_builder.compile()
+
     def build_graph(self, checkpointer):
         builder = StateGraph(AppState)
 
+        # Build the Python code subgraph
+        python_code_subgraph = self.build_python_code_subgraph()
+
+        # Add nodes
         builder.add_node("call_model", self.call_model)
         builder.add_node("tool_node", self.tool_executor)
+        builder.add_node("check_python_code_needed", self.check_python_code_needed)
+        builder.add_node("python_code_subgraph", python_code_subgraph)
 
+        # Define the main graph flow
         builder.add_edge(START, "call_model")
+
+        # Conditional edge from call_model
         builder.add_conditional_edges(
             "call_model",
             lambda state: state.get("use_tool", False),
-            {True: "tool_node", False: END},
+            {True: "tool_node", False: "check_python_code_needed"},
         )
+
         builder.add_edge("tool_node", "call_model")
+
+        # Conditional edge from check_python_code_needed
+        builder.add_conditional_edges(
+            "check_python_code_needed",
+            lambda state: state.get("needs_python_code", False),
+            {True: "python_code_subgraph", False: END},
+        )
+
+        builder.add_edge("python_code_subgraph", END)
 
         self.graph = builder.compile(checkpointer=checkpointer)
 
@@ -177,7 +339,6 @@ class ChatService:
     async def stream_response(
         self, messages: List[ClientMessage], protocol: str = "data"
     ):
-        print(messages)
         if protocol == "text":
             langchain_messages = self._convert_message_to_langchain_format(messages)
             self.build_graph(checkpointer=None)
@@ -190,17 +351,16 @@ class ChatService:
                 search_queries=[],
                 search_sufficient=False,
                 summary=None,
-                python_code_context=None,
                 python_code=None,
                 execution_result=None,
                 knowledge_base_results=None,
                 source_str=None,
                 search_iterations=0,
                 portfolio_data=None,
+                python_subgraph_state=None,
             )
             async for chunk in self.graph.astream_events(state):
                 if chunk.get("event") == "on_chain_stream":
-                    print(chunk)
                     if (
                         chunk["data"].get("chunk")
                         and "messages" in chunk["data"]["chunk"]

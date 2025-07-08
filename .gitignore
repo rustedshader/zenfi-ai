@@ -2,7 +2,7 @@
 .env
 .DS_Store
 __pycache__
-
+node_modules
 # dependencies
 /node_modules
 /.pnp

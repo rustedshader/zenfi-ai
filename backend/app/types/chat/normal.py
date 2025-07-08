@@ -1,8 +1,7 @@
-from pydantic import BaseModel
-from typing import List, Optional
-from typing import Annotated, List, TypedDict, Literal, Optional
-from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
+from typing import List, Optional, Annotated, TypedDict
+from langgraph.graph.message import add_messages
+from enum import Enum
 
 
 class ClientAttachment(BaseModel):
@@ -28,34 +27,10 @@ class Queries(BaseModel):
     )
 
 
-class AppState(TypedDict):
-    messages: Annotated[list, add_messages]
-    needs_portfolio: Optional[bool]
-    needs_knowledge_base: Optional[bool]
-    needs_python_code: Optional[bool]
-    needs_web_search: Optional[bool]
-    search_queries: list[SearchQuery]
-    search_sufficient: Optional[bool]
-    summary: Optional[str]
-    python_code_context: Optional[str]
-    python_code: Optional[str]
-    execution_result: Optional[str]
-    knowledge_base_results: Optional[str] = None
-    source_str: Optional[str] = None
-    search_iterations: int
-    portfolio_data: Optional[str] = None
-
-
+# Python Code Generation Models
 class PythonSearchNeed(BaseModel):
     needs_python_code: Optional[bool] = Field(
-        False,
-        description="Indicates if Python code is needed for the query. Only For Calculations or Data Analysis. If the query can be answered without code, this should be False.",
-    )
-
-
-class PythonCodeContext(BaseModel):
-    python_code_context: Optional[str] = Field(
-        None, description="Context for the Python code generation."
+        default=False,
     )
 
 
@@ -63,3 +38,46 @@ class PythonCode(BaseModel):
     code: Optional[str] = Field(
         None, description="Generated Python code to answer the user's query."
     )
+
+
+class ExecutionStatus(str, Enum):
+    SUCCESS = "success"
+    ERROR = "error"
+    TIMEOUT = "timeout"
+    NOT_EXECUTED = "not_executed"
+
+
+class PythonExecutionResult(BaseModel):
+    status: ExecutionStatus = Field(
+        default=ExecutionStatus.NOT_EXECUTED,
+        description="Status of the Python code execution.",
+    )
+    result: Optional[str] = Field(
+        None, description="The result or output from executing the Python code."
+    )
+    error: Optional[str] = Field(None, description="Error message if execution failed.")
+    execution_time: Optional[float] = Field(
+        None, description="Time taken to execute the code in seconds."
+    )
+
+
+# Python Code Subgraph State
+class PythonCodeState(TypedDict, total=False):
+    messages: Annotated[list, add_messages]
+    python_code: Optional[str]
+    execution_result: Optional[PythonExecutionResult]
+
+
+# Main Application State
+class AppState(TypedDict):
+    messages: Annotated[list, add_messages]
+    needs_python_code: Optional[bool]
+    needs_web_search: Optional[bool]
+    search_queries: list[SearchQuery]
+    search_sufficient: Optional[bool]
+    summary: Optional[str]
+    python_code: Optional[str]
+    execution_result: Optional[str]
+    source_str: Optional[str] = None
+    search_iterations: int
+    python_subgraph_state: Optional[PythonCodeState] = None
