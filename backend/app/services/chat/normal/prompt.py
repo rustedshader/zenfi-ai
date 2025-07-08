@@ -52,12 +52,26 @@ This is general financial information, not personalized advice.Always consult a 
 </Instructions>
 """
 
-tool_exectutor_system_instructions = """
-<Query>
-{query}
-</Query>
+tool_executor_system_instructions = """
+<User Query>
+{user_query}
+</User Query>
 
-You have access to the tools. Use those tools to answer the query if requrired.
+
+<Tool Arguments>
+{tool_args}
+</Tool Arguments>
+
+
+<Instructions>
+You are an expert financial AI assistant with access to a set of tools. 
+- Use the provided tools and their arguments to answer the query directly.
+- Do not ask the user for information that is already present in the tool arguments.
+- If all required arguments are provided, call the tool without requesting further clarification.
+- Only ask the user for missing information if it is absolutely necessary for tool execution.
+- Respond concisely and only in the context of finance and investment.
+- If stock is indian stock, use NSE by default for example: Reliance then RELIANCE.NS
+</Instructions>
 """
 
 
@@ -224,6 +238,161 @@ import pandas as pd
 ```
 </Pandas>
 
+
+<Numpy>
+# For using Numpy
+```python
+import numpy as np
+```
+</Numpy>
+
+</Libraries Specific Instructions>
+</Instruction>
+"""
+
+
+python_code_retry_prompt = """
+<User Query>
+{user_query}
+</User Query>
+
+<Previous Python Code>
+{previous_code}
+</Previous Python Code>
+
+<Previous Error>
+{previous_error}
+</Previous Error>
+
+<Available Libraries>
+- pandas
+- numpy
+- matplotlib
+- scipy
+- statsmodels
+</Available Libraries>
+
+<Example Python Codes>
+```python
+from statsmodels import api as sm
+import numpy as np
+
+# Generate some example data
+np.random.seed(42)
+X = np.random.rand(100)
+y = 2 * X + 1 + np.random.normal(0, 0.1, 100)
+
+# Add constant for intercept
+X = sm.add_constant(X)
+
+# Fit OLS regression model
+model = sm.OLS(y, X)
+results = model.fit()
+
+print("Regression coefficients:", results.params)
+print("R-squared:", results.rsquared)
+```
+
+```python
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+from matplotlib import pyplot as plt
+import numpy as np
+import io
+import base64
+
+# Generate example data
+np.random.seed(42)
+X = np.random.rand(100)
+y = 2 * X + 1 + np.random.normal(0, 0.1, 100)
+
+# Create scatter plot
+plt.scatter(X, y, label='Data')
+
+# Fit a line
+coeffs = np.polyfit(X, y, deg=1)
+y_pred = np.polyval(coeffs, X)
+plt.plot(X, y_pred, color='red', label='Fit: y={{:.2f}}x+{{:.2f}}'.format(coeffs[0], coeffs[1]))
+
+# Add labels and title
+plt.xlabel('X')
+plt.ylabel('y')
+plt.title('Linear Fit Example')
+plt.legend()
+plt.tight_layout()
+
+# Save plot to bytes buffer and encode as base64
+buf = io.BytesIO()
+plt.savefig(buf, format='png')
+buf.seek(0)
+img_str = base64.b64encode(buf.getvalue()).decode('utf-8')
+plt.close()
+
+# Return base64 string
+print(img_str)
+```
+</Example Python Codes>
+
+<Instruction>
+You are a professional python code generator tasked with fixing the previous code that encountered an error.
+
+CRITICAL: Analyze the previous error carefully and fix the issue in the new code.
+
+- The code should be executable and relevant to the user query. 
+- Fix the specific error mentioned in the Previous Error section.
+- Ensure that the code is well-structured, efficient, and includes necessary imports. 
+- Do not provide any explanations or additional text.
+- *Available libraries* are mentioned above.
+- Always output images in base64 format.
+- Learn from the previous error and avoid similar mistakes.
+
+<Libraries Specific Instructions>
+**If import like example:  import statsmodels.api as sm is used, it should be replaced with from statsmodels import api as sm.**
+
+<Scipy>
+If using  *scipy* you can use the following import statements:
+
+# For scipy
+
+```python
+import micropip
+await micropip.install('scipy')
+import scipy
+```
+</Scipy>
+
+<StatsModels>
+If using  *statsmodels* you can use the following import statements:
+
+# For using Statsmodels
+```python
+from statsmodels import api as sm
+
+Never use statsmodels.api instead use from statsmodels import api as sm
+```
+</StatsModels>
+
+<Matplotlib>
+If using  *matplotlib* you can use the following import statements:
+
+# For using Matplotlib
+```python
+from matplotlib import pyplot as plt
+
+Never use matplotlib.pyplot instead use from matplotlib import pyplot as plt
+```
+
+always output image in base64 format.
+</Matplotlib>
+
+<Pandas>
+If using  *pandas* you can use the following import statements:
+
+# For using Pandas
+```python
+import pandas as pd
+```
+</Pandas>
 
 <Numpy>
 # For using Numpy

@@ -70,9 +70,18 @@ class AppState(TypedDict):
     search_sufficient: Optional[bool]
     summary: Optional[str]
     python_code: Optional[str]
-    execution_result: Optional[str]
+    execution_result: Optional[PythonExecutionResult]
     source_str: Optional[str] = None
     search_iterations: int
-    python_code: Optional[str]
-    execution_result: Optional[PythonExecutionResult]
     tools_response: Optional[str]
+    # Retry related fields
+    python_retry_count: int
+    max_python_retries: int
+    previous_python_error: Optional[str]
+    # Additional fields that might be needed
+    needs_portfolio: Optional[bool]
+    needs_knowledge_base: Optional[bool]
+    knowledge_base_results: Optional[str]
+    portfolio_data: Optional[str]
+    has_tool_calls: Optional[bool]
+    tools_executed: Optional[bool]

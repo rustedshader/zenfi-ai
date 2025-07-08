@@ -42,7 +42,8 @@ from .prompt import (
     SYSTEM_INSTRUCTIONS,
     python_code_generation_prompt,
     python_code_needed_decision_prompt,
-    tool_exectutor_system_instructions,
+    python_code_retry_prompt,
+    tool_executor_system_instructions,
 )
 from langgraph.graph import StateGraph, END, START
 from app.types.chat.normal import (
@@ -163,12 +164,65 @@ class ChatService:
 
             return {
                 "python_code": python_code,
+                "python_retry_count": 0,
+                "previous_python_error": None,
             }
 
         except Exception as e:
             print(f"Error in generate_python_code: {e}")
             return {
                 "python_code": None,
+                "python_retry_count": 0,
+                "previous_python_error": None,
+            }
+
+    async def regenerate_python_code(self, state: AppState):
+        print("LOG: Regenerating Python Code with error context...")
+        try:
+            last_message = next(
+                (
+                    msg
+                    for msg in reversed(state["messages"])
+                    if isinstance(msg, HumanMessage)
+                ),
+                None,
+            )
+            if last_message is None:
+                raise ValueError("No HumanMessage found in messages.")
+
+            previous_code = state.get("python_code", "")
+            previous_error = state.get("previous_python_error", "")
+            retry_count = state.get("python_retry_count", 0)
+
+            structured_llm = self.llm.with_structured_output(PythonCode)
+            formatted_prompt = python_code_retry_prompt.format(
+                user_query=last_message.content,
+                previous_code=previous_code,
+                previous_error=previous_error,
+            )
+
+            response = await structured_llm.ainvoke(
+                [
+                    SystemMessage(content=formatted_prompt),
+                    HumanMessage(
+                        content="Fix the Python code based on the previous error."
+                    ),
+                ]
+            )
+
+            python_code = getattr(response, "code", None)
+            print("LOG: Regenerated Python Code:", python_code)
+
+            return {
+                "python_code": python_code,
+                "python_retry_count": retry_count + 1,
+            }
+
+        except Exception as e:
+            print(f"Error in regenerate_python_code: {e}")
+            return {
+                "python_code": None,
+                "python_retry_count": state.get("python_retry_count", 0) + 1,
             }
 
     async def execute_python_code(self, state: AppState):
@@ -197,13 +251,32 @@ class ChatService:
 
             print("LOG: Python code execution result:", result)
 
-            return {
-                "execution_result": PythonExecutionResult(
-                    status=ExecutionStatus.SUCCESS,
-                    result=str(result),
-                    execution_time=execution_time,
+            # Check the actual execution status from the sandbox result
+            if hasattr(result, "status") and result.status == "error":
+                # Execution failed, get error details
+                error_message = (
+                    result.stderr if hasattr(result, "stderr") else str(result)
                 )
-            }
+                return {
+                    "execution_result": PythonExecutionResult(
+                        status=ExecutionStatus.ERROR,
+                        error=error_message,
+                        execution_time=execution_time,
+                    ),
+                    "previous_python_error": error_message,
+                }
+            else:
+                # Execution succeeded
+                result_output = (
+                    result.stdout if hasattr(result, "stdout") else str(result)
+                )
+                return {
+                    "execution_result": PythonExecutionResult(
+                        status=ExecutionStatus.SUCCESS,
+                        result=result_output,
+                        execution_time=execution_time,
+                    )
+                }
         except Exception as e:
             execution_time = (
                 time.time() - start_time if "start_time" in locals() else None
@@ -214,7 +287,8 @@ class ChatService:
                     status=ExecutionStatus.ERROR,
                     error=str(e),
                     execution_time=execution_time,
-                )
+                ),
+                "previous_python_error": str(e),
             }
 
     async def call_tools(self, state: AppState):
@@ -225,9 +299,30 @@ class ChatService:
         """
         print("LOG: Checking for potential tool calls...")
         messages = state["messages"]
+        last_message = next(
+            (msg for msg in reversed(messages) if isinstance(msg, HumanMessage)),
+            None,
+        )
 
-        # The llm_with_tools will automatically decide if a tool should be called
-        response = await self.llm_with_tools.ainvoke(messages)
+        # Build a string describing the available tools and their signatures
+        tool_args = ", ".join(
+            [
+                f"{getattr(tool, '__name__', getattr(tool, 'name', str(tool)))}({', '.join(getattr(tool, '__annotations__', {}).keys())})"
+                for tool in self.tools
+            ]
+        )
+        print(tool_args)
+
+        formatted_system_prompt = tool_executor_system_instructions.format(
+            user_query=last_message.content, tool_args=tool_args
+        )
+        response = await self.llm_with_tools.ainvoke(
+            messages
+            + [
+                SystemMessage(content=formatted_system_prompt),
+                HumanMessage(content="Generate response with tools"),
+            ],
+        )
         print("LOG: Tool calling LLM response:", response)
 
         # Append the response to the history of messages
@@ -253,6 +348,31 @@ class ChatService:
         # Otherwise, route to the final model call
         print("LOG: No tool calls found, routing to final model.")
         return "call_model"
+
+    def should_retry_python_code(self, state: AppState) -> str:
+        """
+        Determines whether to retry Python code generation or proceed to tools.
+        """
+        execution_result = state.get("execution_result")
+        retry_count = state.get("python_retry_count", 0)
+        max_retries = state.get("max_python_retries", 2)  # Default max retries
+
+        print(
+            f"LOG: Checking retry condition - Status: {execution_result.status if execution_result else 'None'}, Retry count: {retry_count}, Max retries: {max_retries}"
+        )
+
+        # If execution failed and we haven't exceeded max retries, retry
+        if (
+            execution_result
+            and execution_result.status == ExecutionStatus.ERROR
+            and retry_count < max_retries
+        ):
+            print("LOG: Retrying Python code generation")
+            return "regenerate_python_code"
+
+        # Otherwise, proceed to tools
+        print("LOG: Proceeding to tools")
+        return "call_tools"
 
     async def call_model(self, state: AppState):
         print("LOG: Calling the model with current state...")
@@ -301,6 +421,7 @@ class ChatService:
         builder.add_node("call_model", self.call_model)
         builder.add_node("check_python_code_needed", self.check_python_code_needed)
         builder.add_node("generate_python_code", self.generate_python_code)
+        builder.add_node("regenerate_python_code", self.regenerate_python_code)
         builder.add_node("execute_python_code", self.execute_python_code)
 
         # This node now correctly appends the AIMessage to the state
@@ -320,7 +441,17 @@ class ChatService:
 
         builder.add_conditional_edges("check_python_code_needed", after_python_check)
         builder.add_edge("generate_python_code", "execute_python_code")
-        builder.add_edge("execute_python_code", "call_tools")
+        builder.add_edge("regenerate_python_code", "execute_python_code")
+
+        # Add conditional edge after python execution to decide retry or proceed
+        builder.add_conditional_edges(
+            "execute_python_code",
+            self.should_retry_python_code,
+            {
+                "regenerate_python_code": "regenerate_python_code",
+                "call_tools": "call_tools",
+            },
+        )
 
         # *** REVISED TOOL EXECUTION FLOW ***
         # After calling the tool-enabled LLM, we use our new conditional function
@@ -435,6 +566,9 @@ class ChatService:
                 has_tool_calls=False,
                 tools_executed=False,
                 tools_response=None,
+                python_retry_count=0,
+                max_python_retries=2,
+                previous_python_error=None,
             )
             async for chunk in self.graph.astream_events(state):
                 if chunk.get("event") == "on_chain_stream":
