@@ -36,6 +36,7 @@ from langchain_core.messages import (
     HumanMessage,
     AIMessage,
     AIMessageChunk,
+    ToolMessage,
 )
 from .prompt import (
     SYSTEM_INSTRUCTIONS,
@@ -216,83 +217,46 @@ class ChatService:
                 )
             }
 
-    # FIXED: This method now properly handles tool calling
     async def call_tools(self, state: AppState):
-        print("LOG: Calling tools...")
-        try:
-            last_message = next(
-                (
-                    msg
-                    for msg in reversed(state["messages"])
-                    if isinstance(msg, HumanMessage)
-                ),
-                None,
-            )
-            if last_message is None:
-                raise ValueError("No HumanMessage found in messages.")
+        """
+        This node invokes the LLM with tools. If the LLM decides to call a tool,
+        it will return an AIMessage with tool_calls. We append this message to
+        our state.
+        """
+        print("LOG: Checking for potential tool calls...")
+        messages = state["messages"]
 
-            structured_system_prompt = tool_exectutor_system_instructions.format(
-                query=last_message.content
-            )
+        # The llm_with_tools will automatically decide if a tool should be called
+        response = await self.llm_with_tools.ainvoke(messages)
+        print("LOG: Tool calling LLM response:", response)
 
-            # Get the AI response with tool calls
-            response = await self.llm_with_tools.ainvoke(
-                [
-                    SystemMessage(content=structured_system_prompt),
-                    HumanMessage(content=last_message.content),
-                ]
-            )
+        # Append the response to the history of messages
+        # This is the crucial step.
+        return {"messages": messages + [response]}
 
-            print(response)
+    def should_call_tools(self, state: AppState) -> str:
+        """
+        Determines whether to call tools or end the chain.
+        """
+        print("LOG: Checking if the last message contains tool calls...")
+        last_message = state["messages"][-1]
 
-            # Add the AI response to messages
-            updated_messages = state["messages"] + [response]
+        # If the last message is an AIMessage and has tool_calls, route to tool_node
+        if (
+            isinstance(last_message, AIMessage)
+            and hasattr(last_message, "tool_calls")
+            and len(last_message.tool_calls) > 0
+        ):
+            print("LOG: Routing to tool node.")
+            return "tool_node"
 
-            # Check if there are tool calls
-            if hasattr(response, "tool_calls") and response.tool_calls:
-                print(f"LOG: Found {len(response.tool_calls)} tool calls")
-                return {
-                    "messages": updated_messages,
-                    "has_tool_calls": True,
-                }
-            else:
-                print("LOG: No tool calls found")
-                return {
-                    "messages": updated_messages,
-                    "has_tool_calls": False,
-                    "tools_response": response.content,
-                }
-
-        except Exception as e:
-            print(f"Error in call_tools: {e}")
-            return {
-                "has_tool_calls": False,
-                "tools_response": None,
-            }
-
-    # NEW: This method executes the actual tools
-    async def execute_tools(self, state: AppState):
-        print("LOG: Executing tools...")
-        try:
-            # The ToolNode expects the state to contain messages with tool calls
-            result = await self.tool_executor.ainvoke(state)
-
-            # Add tool results to messages
-            updated_messages = state["messages"] + result.get("messages", [])
-
-            return {
-                "messages": updated_messages,
-                "tools_executed": True,
-            }
-        except Exception as e:
-            print(f"Error in execute_tools: {e}")
-            return {
-                "tools_executed": False,
-                "tools_response": f"Error executing tools: {str(e)}",
-            }
+        # Otherwise, route to the final model call
+        print("LOG: No tool calls found, routing to final model.")
+        return "call_model"
 
     async def call_model(self, state: AppState):
         print("LOG: Calling the model with current state...")
+        print("App State", state)
         last_message = next(
             (
                 msg
@@ -302,24 +266,32 @@ class ChatService:
             None,
         )
 
-        # Get the context from state
+        tools_response = next(
+            (
+                msg
+                for msg in reversed(state["messages"])
+                if isinstance(msg, ToolMessage)
+            ),
+            None,
+        )
+
         python_code = state.get("python_code", "")
         python_execution_result = state.get("execution_result", "")
-        tools_response = state.get("tools_response", "")
+        tools_response_content = tools_response.content if tools_response else ""
+        print("Tools Response:", tools_response_content)
 
         formatted_system_prompt = SYSTEM_INSTRUCTIONS.format(
             user_query=last_message.content,
             python_code=python_code,
             python_execution_result=python_execution_result,
-            tools_response=tools_response,
+            tools_response=tools_response_content,
         )
-
-        # Use the full conversation history for context
-        messages_for_model = [SystemMessage(content=formatted_system_prompt)] + state[
-            "messages"
-        ]
-
-        response_stream = self.llm.astream(messages_for_model)
+        response_stream = self.llm.astream(
+            [
+                SystemMessage(content=formatted_system_prompt),
+                HumanMessage(content=last_message.content),
+            ]
+        )
         async for response in response_stream:
             yield {"messages": [response]}
 
@@ -330,27 +302,42 @@ class ChatService:
         builder.add_node("check_python_code_needed", self.check_python_code_needed)
         builder.add_node("generate_python_code", self.generate_python_code)
         builder.add_node("execute_python_code", self.execute_python_code)
+
+        # This node now correctly appends the AIMessage to the state
         builder.add_node("call_tools", self.call_tools)
-        builder.add_node("execute_tools", self.execute_tools)
+
+        # This is the prebuilt ToolNode
+        builder.add_node("tool_node", self.tool_executor)
 
         builder.add_edge(START, "check_python_code_needed")
-        builder.add_conditional_edges(
-            "check_python_code_needed",
-            lambda state: "generate_python_code"
-            if state.get("needs_python_code", False)
-            else "call_tools",
-        )
+
+        def after_python_check(state):
+            return (
+                "generate_python_code"
+                if state.get("needs_python_code", False)
+                else "call_tools"
+            )
+
+        builder.add_conditional_edges("check_python_code_needed", after_python_check)
         builder.add_edge("generate_python_code", "execute_python_code")
         builder.add_edge("execute_python_code", "call_tools")
 
+        # *** REVISED TOOL EXECUTION FLOW ***
+        # After calling the tool-enabled LLM, we use our new conditional function
         builder.add_conditional_edges(
             "call_tools",
-            lambda state: "execute_tools"
-            if state.get("has_tool_calls", False)
-            else "call_model",
+            self.should_call_tools,  # Use the new function here
+            {
+                "tool_node": "tool_node",
+                "call_model": "call_model",
+            },
         )
 
-        builder.add_edge("execute_tools", "call_model")
+        # After the ToolNode executes, the ToolMessages are added to the state.
+        # We can now pass this full context to the final model to generate a response.
+        builder.add_edge("tool_node", "call_model")
+
+        # The final model call ends the graph run
         builder.add_edge("call_model", END)
 
         self.graph = builder.compile(checkpointer=checkpointer)
@@ -459,4 +446,5 @@ class ChatService:
                             if isinstance(
                                 chunk["data"]["chunk"]["messages"][0], AIMessageChunk
                             ):
+                                print(chunk["data"]["chunk"]["messages"][0])
                                 yield chunk["data"]["chunk"]["messages"][0].content

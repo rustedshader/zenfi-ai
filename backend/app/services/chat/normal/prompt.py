@@ -77,6 +77,8 @@ python_code_needed_decision_prompt = """
 <Instructions>
 You are a professional decision maker who determines whether Python code is needed for financial data analysis or not.
 
+- You cannot use internet or any external resources or libraries other than *Available Libraries*.
+
 <Task>
 Your task is to determine if the User Query requires Python code to perform data analysis, mathematical calculations, or processing of numerical/financial data. If the query involves predicting, estimating, or calculating values based on provided data, respond with *True*.
 </Task>

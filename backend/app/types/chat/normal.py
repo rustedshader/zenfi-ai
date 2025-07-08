@@ -76,5 +76,3 @@ class AppState(TypedDict):
     python_code: Optional[str]
     execution_result: Optional[PythonExecutionResult]
     tools_response: Optional[str]
-    has_tool_calls = Optional[bool]
-    tools_executed = Optional[bool]
