@@ -73,6 +73,10 @@ python_code_needed_decision_prompt = """
 {user_query}
 </User Query>
 
+<Available Tool Data Context>
+{tool_data_context}
+</Available Tool Data Context>
+
 <Available Libraries>
 - pandas
 - numpy
@@ -84,9 +88,19 @@ python_code_needed_decision_prompt = """
 You are a professional decision maker who determines whether Python code is needed for financial data analysis or not.
 
 - You cannot use internet or any external resources or any other libraries other than *Available Libraries*.
+- Consider if the query requires complex calculations, data analysis, or mathematical processing that would benefit from Python code.
+- Take into account any available tool data that might be used for analysis.
 
 <Task>
-Your task is to determine if the User Query requires Python code to perform data analysis, mathematical calculations, or processing of numerical/financial data. If the query involves predicting, estimating, or calculating values based on provided data, respond with *True*.
+Your task is to determine if the User Query requires Python code to perform data analysis, mathematical calculations, or processing of numerical/financial data. If the query involves predicting, estimating, calculating values, statistical analysis, or complex data manipulation based on provided data, respond with *True*.
+
+Consider these scenarios for Python code generation:
+- Statistical analysis (regression, correlation, etc.)
+- Financial calculations (ratios, returns, volatility, etc.)
+- Data visualization or complex data processing
+- Mathematical modeling or predictions
+- Comparative analysis requiring calculations
+- Time series analysis
 </Task>
 
 <Decision Criteria>
@@ -101,6 +115,10 @@ python_code_generation_prompt = """
 <User Query>
 {user_query}
 </User Query>
+
+<Tool Data Available>
+{tool_data}
+</Tool Data Available>
 
 <Available Libraries>
 - pandas
@@ -134,9 +152,18 @@ print("R-squared:", results.rsquared)
 <Instruction>
 You are a professional python code generator.
 - The code should be executable and relevant to the user query. 
+- Use the provided Tool Data Available section to incorporate real financial data into your analysis when relevant.
+- When tool data is available, use those actual values in your calculations instead of generating mock data.
+- Extract numerical values from the tool data and use them appropriately in your Python code.
 - Ensure that the code is well-structured, efficient, and includes necessary imports. 
 - Do not provide any explanations or additional text.
 - *Available libraries* are mentioned above.
+
+<Data Usage Guidelines>
+- If tool data contains stock prices, volumes, or other numerical data, extract and use these values
+- Create variables from the tool data at the beginning of your code
+- Use real data for calculations, comparisons, and analysis
+- If tool data is insufficient, you may supplement with reasonable assumptions but prefer real data when available
 
 <Libraries Specific Instructions>
 **If import like example:  import statsmodels.api as sm is used, it should be replaced with from statsmodels import api as sm.**
@@ -199,6 +226,10 @@ python_code_retry_prompt = """
 {previous_error}
 </Previous Error>
 
+<Tool Data Available>
+{tool_data}
+</Tool Data Available>
+
 <Available Libraries>
 - pandas
 - numpy
@@ -235,6 +266,8 @@ CRITICAL: Analyze the previous error carefully and fix the issue in the new code
 
 - The code should be executable and relevant to the user query. 
 - Fix the specific error mentioned in the Previous Error section.
+- Use the provided Tool Data Available section to incorporate real financial data when relevant.
+- Extract numerical values from the tool data and use them appropriately in your Python code.
 - Ensure that the code is well-structured, efficient, and includes necessary imports. 
 - Do not provide any explanations or additional text.
 - *Available libraries* are mentioned above.

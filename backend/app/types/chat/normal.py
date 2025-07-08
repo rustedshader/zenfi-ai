@@ -84,3 +84,4 @@ class AppState(TypedDict):
     tool_retry_count: int
     max_tool_retries: int
     needs_additional_tools: Optional[bool]
+    tool_data_for_python: Optional[str]

@@ -1,3 +1,27 @@
+"""
+Enhanced Python Code Generation with Tool Data Integration
+
+This module now supports feeding real financial data from tools into Python code generation,
+enabling more accurate and realistic analysis. The system works as follows:
+
+1. When Python code is needed, the system first fetches relevant financial data using available tools
+2. This data is then formatted and passed to the Python code generation prompt
+3. The generated Python code uses real financial data instead of mock data
+4. This enables more accurate calculations, analysis, and modeling
+
+Example workflow:
+- User asks: "Calculate the P/E ratio for RELIANCE.NS and compare it with industry average"
+- System fetches: stock price, market cap, shares outstanding, earnings data
+- Python code generates: Uses real data to calculate P/E ratio and perform comparison
+- Result: Accurate analysis based on current market data
+
+Key improvements:
+- Real data integration instead of mock data
+- Better analysis accuracy
+- More relevant Python code generation
+- Enhanced decision making for when Python code is needed
+"""
+
 from typing import List
 import time
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -112,9 +136,13 @@ class ChatService:
             if last_message is None:
                 raise ValueError("No HumanMessage found in messages.")
             print("LOG: Last message content:", last_message.content)
+
+            # Get some context about available tools and data for decision making
+            tool_data_context = "Available tools can provide: stock prices, volumes, market cap, financial ratios, historical data, income statements, options data, and web search capabilities."
+
             structured_llm = self.llm.with_structured_output(PythonSearchNeed)
             formatted_prompt = python_code_needed_decision_prompt.format(
-                user_query=last_message
+                user_query=last_message.content, tool_data_context=tool_data_context
             )
             response: PythonSearchNeed = await structured_llm.ainvoke(
                 [
@@ -151,9 +179,14 @@ class ChatService:
             )
             if last_message is None:
                 raise ValueError("No HumanMessage found in messages.")
+
+            # Fetch tool data for Python code generation
+            tool_data_result = await self.fetch_tool_data_for_python(state)
+            tool_data = tool_data_result.get("tool_data_for_python", "")
+
             structured_llm = self.llm.with_structured_output(PythonCode)
             formatted_prompt = python_code_generation_prompt.format(
-                user_query=last_message.content
+                user_query=last_message.content, tool_data=tool_data
             )
 
             response = await structured_llm.ainvoke(
@@ -170,6 +203,7 @@ class ChatService:
                 "python_code": python_code,
                 "python_retry_count": 0,
                 "previous_python_error": None,
+                "tool_data_for_python": tool_data,
             }
 
         except Exception as e:
@@ -178,6 +212,7 @@ class ChatService:
                 "python_code": None,
                 "python_retry_count": 0,
                 "previous_python_error": None,
+                "tool_data_for_python": "",
             }
 
     async def regenerate_python_code(self, state: AppState):
@@ -198,11 +233,18 @@ class ChatService:
             previous_error = state.get("previous_python_error", "")
             retry_count = state.get("python_retry_count", 0)
 
+            # Use existing tool data or fetch new data if not available
+            tool_data = state.get("tool_data_for_python", "")
+            if not tool_data:
+                tool_data_result = await self.fetch_tool_data_for_python(state)
+                tool_data = tool_data_result.get("tool_data_for_python", "")
+
             structured_llm = self.llm.with_structured_output(PythonCode)
             formatted_prompt = python_code_retry_prompt.format(
                 user_query=last_message.content,
                 previous_code=previous_code,
                 previous_error=previous_error,
+                tool_data=tool_data,
             )
 
             response = await structured_llm.ainvoke(
@@ -220,6 +262,7 @@ class ChatService:
             return {
                 "python_code": python_code,
                 "python_retry_count": retry_count + 1,
+                "tool_data_for_python": tool_data,
             }
 
         except Exception as e:
@@ -752,3 +795,163 @@ class ChatService:
                                 if content != last_yielded_content:
                                     yield content
                                     last_yielded_content = content
+
+    async def fetch_tool_data_for_python(self, state: AppState):
+        """Fetch tool data that can be used in Python code generation for better analysis."""
+        print("LOG: Fetching tool data for Python code generation...")
+        try:
+            last_message = next(
+                (
+                    msg
+                    for msg in reversed(state["messages"])
+                    if isinstance(msg, HumanMessage)
+                ),
+                None,
+            )
+            if last_message is None:
+                return {"tool_data_for_python": ""}
+
+            # Create a system prompt to decide which tools to call for data gathering
+            data_gathering_prompt = f"""
+            <User Query>
+            {last_message.content}
+            </User Query>
+            
+            <Instructions>
+            You are a data gathering assistant for Python-based financial analysis. Based on the user query, determine which financial tools should be called to gather numerical data that will be useful for calculations, analysis, or modeling.
+            
+            Focus on gathering:
+            1. Stock prices (current, high, low, open, close)
+            2. Volume data
+            3. Financial ratios and metrics
+            4. Historical data for time series analysis
+            5. Market capitalization and valuation metrics
+            6. Any other numerical data relevant to the analysis
+            
+            Consider the type of analysis mentioned:
+            - Comparison analysis: Get data for multiple stocks
+            - Trend analysis: Get historical data
+            - Valuation analysis: Get financial metrics and ratios
+            - Risk analysis: Get volatility and price data
+            
+            If specific stocks are mentioned, use the correct format (e.g., "RELIANCE.NS" for Indian stocks).
+            Call multiple tools to gather comprehensive data for the analysis.
+            
+            Be strategic about which tools to call - gather the data that would be most useful for Python-based calculations and analysis.
+            </Instructions>
+            """
+
+            # Call tools to gather data
+            response = await self.llm_with_tools.ainvoke(
+                [
+                    SystemMessage(content=data_gathering_prompt),
+                    HumanMessage(
+                        content="Gather the necessary financial data for Python analysis"
+                    ),
+                ]
+            )
+
+            # If tools were called, execute them
+            if hasattr(response, "tool_calls") and len(response.tool_calls) > 0:
+                print(
+                    f"LOG: Executing {len(response.tool_calls)} tools for data gathering..."
+                )
+                temp_messages = [response]
+                tool_results = await self.tool_executor.ainvoke(
+                    {"messages": temp_messages}
+                )
+
+                # Extract tool data
+                tool_data = []
+                for msg in tool_results["messages"]:
+                    if isinstance(msg, ToolMessage):
+                        tool_data.append(
+                            {
+                                "tool_name": msg.name
+                                if hasattr(msg, "name")
+                                else "unknown",
+                                "data": msg.content,
+                            }
+                        )
+
+                print(f"LOG: Successfully gathered data from {len(tool_data)} tools")
+
+                # Format tool data for Python code
+                formatted_tool_data = self._format_tool_data_for_python(tool_data)
+                return {"tool_data_for_python": formatted_tool_data}
+
+            print("LOG: No tools called for data gathering")
+            return {"tool_data_for_python": ""}
+
+        except Exception as e:
+            print(f"Error in fetch_tool_data_for_python: {e}")
+            return {"tool_data_for_python": ""}
+
+    def _format_tool_data_for_python(self, tool_data):
+        """Format tool data in a way that can be easily used in Python code."""
+        if not tool_data:
+            return ""
+
+        formatted_data = "# Available Tool Data for Analysis:\n"
+        data_variables = []
+
+        for i, data_item in enumerate(tool_data):
+            tool_name = data_item.get("tool_name", f"tool_{i}")
+            data_content = data_item.get("data", "")
+
+            # Clean tool name for variable naming
+            clean_tool_name = (
+                tool_name.replace("get_stock_", "").replace("_", "").lower()
+            )
+
+            # Try to extract numerical data and create Python variables
+            if self._is_numerical_data(data_content):
+                try:
+                    # Extract numbers from the data
+                    import re
+
+                    numbers = re.findall(r"-?\d+\.?\d*", str(data_content))
+                    if numbers:
+                        # Take the first number found (usually the main value)
+                        value = numbers[0]
+                        # Try to convert to appropriate type
+                        if "." in value:
+                            python_var = f"{clean_tool_name} = {float(value)}"
+                        else:
+                            python_var = f"{clean_tool_name} = {int(value)}"
+
+                        data_variables.append(python_var)
+                        formatted_data += f"# {tool_name}: {data_content}\n"
+                        formatted_data += f"{python_var}\n"
+                    else:
+                        formatted_data += f"# {tool_name}: {data_content}\n"
+                except Exception:
+                    formatted_data += f"# {tool_name}: {data_content}\n"
+            else:
+                # For non-numerical data, add as comments with truncation
+                content_preview = (
+                    data_content[:200] + "..."
+                    if len(data_content) > 200
+                    else data_content
+                )
+                formatted_data += f"# {tool_name}: {content_preview}\n"
+
+        # Add a summary of available variables
+        if data_variables:
+            formatted_data += "\n# Available variables for analysis:\n"
+            for var in data_variables:
+                formatted_data += f"# {var}\n"
+            formatted_data += "\n"
+
+        return formatted_data
+
+    def _is_numerical_data(self, data):
+        """Check if data contains numerical values that could be useful for Python analysis."""
+        try:
+            # Simple check for numbers in the data
+            import re
+
+            numbers = re.findall(r"\d+\.?\d*", str(data))
+            return len(numbers) > 0
+        except Exception:
+            return False
