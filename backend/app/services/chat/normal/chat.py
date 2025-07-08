@@ -104,7 +104,17 @@ class ChatService:
 
     async def check_python_code_needed(self, state: AppState):
         try:
-            last_message = state["messages"][-1]
+            last_message = next(
+                (
+                    msg
+                    for msg in reversed(state["messages"])
+                    if isinstance(msg, HumanMessage)
+                ),
+                None,
+            )
+            if last_message is None:
+                raise ValueError("No HumanMessage found in messages.")
+            print("LOG: Last message content:", last_message.content)
             structured_llm = self.llm.with_structured_output(PythonSearchNeed)
             formatted_prompt = python_code_needed_decision_prompt.format(
                 user_query=last_message
@@ -119,7 +129,6 @@ class ChatService:
 
             needs_python_code = getattr(response, "needs_python_code", False)
 
-            # Initialize Python subgraph state if needed
             python_subgraph_state = None
             if needs_python_code:
                 python_subgraph_state = PythonCodeState(
@@ -138,13 +147,19 @@ class ChatService:
             print(f"Error in check_python_code_needed: {e}")
             return {"needs_python_code": False, "python_subgraph_state": None}
 
-    # Python Code Subgraph Functions
     async def generate_python_code(self, state: PythonCodeState):
-        print(state)
         print("LOG: Generating Python Code...")
         try:
-            last_message = state["messages"][-1]
-            print("LOG: Attempting to generate Python code...")
+            last_message = next(
+                (
+                    msg
+                    for msg in reversed(state["messages"])
+                    if isinstance(msg, HumanMessage)
+                ),
+                None,
+            )
+            if last_message is None:
+                raise ValueError("No HumanMessage found in messages.")
             structured_llm = self.llm.with_structured_output(PythonCode)
             formatted_prompt = python_code_generation_prompt.format(
                 user_query=last_message.content
@@ -183,7 +198,14 @@ class ChatService:
 
             start_time = time.time()
 
-            sandbox = PyodideSandbox(allow_net=True)
+            sandbox = PyodideSandbox(
+                allow_net=True,
+                allow_env=True,
+                allow_run=True,
+                allow_write=True,
+                allow_read=True,
+                allow_ffi=True,
+            )
             result = await sandbox.execute(python_code)
             execution_time = time.time() - start_time
 
@@ -210,18 +232,14 @@ class ChatService:
             }
 
     def build_python_code_subgraph(self):
-        """Build the Python code generation subgraph"""
         python_builder = StateGraph(PythonCodeState)
         print("Building Python code subgraph...")
 
-        # Add nodes for Python code generation
         python_builder.add_node("generate_python_code", self.generate_python_code)
         python_builder.add_node("execute_python_code", self.execute_python_code)
 
-        # Define the flow within the subgraph
         python_builder.add_edge(START, "generate_python_code")
 
-        # Conditional edge based on code generation success
         python_builder.add_conditional_edges(
             "generate_python_code",
             lambda state: state.get("python_code") is not None,
@@ -235,19 +253,15 @@ class ChatService:
     def build_graph(self, checkpointer):
         builder = StateGraph(AppState)
 
-        # Build the Python code subgraph
         python_code_subgraph = self.build_python_code_subgraph()
 
-        # Add nodes
         builder.add_node("call_model", self.call_model)
         builder.add_node("tool_node", self.tool_executor)
         builder.add_node("check_python_code_needed", self.check_python_code_needed)
         builder.add_node("python_code_subgraph", python_code_subgraph)
 
-        # Define the main graph flow
         builder.add_edge(START, "call_model")
 
-        # Conditional edge from call_model
         builder.add_conditional_edges(
             "call_model",
             lambda state: state.get("use_tool", False),
@@ -256,7 +270,6 @@ class ChatService:
 
         builder.add_edge("tool_node", "call_model")
 
-        # Conditional edge from check_python_code_needed
         builder.add_conditional_edges(
             "check_python_code_needed",
             lambda state: state.get("needs_python_code", False),

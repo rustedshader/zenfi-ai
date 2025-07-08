@@ -36,35 +36,31 @@ This is general financial information, not personalized advice.Always consult a 
 """
 
 python_code_needed_decision_prompt = """
-return True
+<User Query>
+{user_query}
+</User Query>
+
+<Available Libraries>
+- pandas
+- numpy
+- matplotlib
+- scipy
+- statsmodels
+</Available Libraries>
+
+<Instructions>
+You are a professional decision maker who determines whether Python code is needed for financial data analysis or not.
+
+<Task>
+Your task is to determine if the User Query requires Python code to perform data analysis, mathematical calculations, or processing of numerical/financial data. If the query involves predicting, estimating, or calculating values based on provided data, respond with *True*.
+</Task>
+
+<Decision Criteria>
+Respond only with *True* or *False*.
+</Decision Criteria>
+
+</Instructions>
 """
-
-# python_code_needed_decision_prompt = """
-# <User Query>
-# {user_query}
-# </User Query>
-
-# <Available Libraries>
-# - pandas
-# - numpy
-# - matplotlib
-# - scipy
-# - statsmodels
-# </Available Libraries>
-
-# <Instructions>
-# You are a professional decision maker who determines whether Python code is needed for financial data analysis or not.
-
-# <Task>
-# Your task is to determine if the User Query requires Python code to perform data analysis, mathematical calculations, or processing of numerical/financial data. If the query involves predicting, estimating, or calculating values based on provided data, respond with *True*.
-# </Task>
-
-# <Decision Criteria>
-# Respond only with *True* or *False*.
-# </Decision Criteria>
-
-# </Instructions>
-# """
 
 
 python_code_generation_prompt = """
