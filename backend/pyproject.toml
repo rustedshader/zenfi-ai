@@ -4,4 +4,10 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "alembic>=1.16.2",
+    "langchain>=0.3.26",
+    "langgraph>=0.5.1",
+    "psycopg2>=2.9.10",
+    "yfinance>=0.2.65",
+]
