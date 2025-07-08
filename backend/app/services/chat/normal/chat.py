@@ -31,6 +31,7 @@ from app.utils.tools.finance.stock_tools import (
     get_stock_percentage_change,
     get_stock_price_change,
 )
+from app.utils.tools.web_search.google_search import google_search
 from langchain_core.messages import (
     SystemMessage,
     HumanMessage,
@@ -91,6 +92,7 @@ class ChatService:
             get_stock_point_change,
             get_stock_percentage_change,
             get_stock_price_change,
+            google_search,
         ]
         self.tool_executor = ToolNode(self.tools)
         self.llm_with_tools = self.llm.bind_tools(self.tools)
