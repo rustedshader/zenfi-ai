@@ -17,7 +17,9 @@ export default function Page() {
   const [input, setInput] = useState("");
   const { messages, sendMessage, status } = useChat({
     transport: new TextStreamChatTransport({
-      api: "http://127.0.0.1:8000/api/chat/stream?protocol=text",
+      api: `${
+        process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+      }/api/chat/stream?protocol=text`,
     }),
   });
 

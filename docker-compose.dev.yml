@@ -40,6 +40,28 @@ services:
       - ./backend:/app
     command: ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.api.index:app --host 0.0.0.0 --port 8000 --reload"]
 
+  # Frontend Service (Development)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: zenfi-frontend-dev
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=development
+      - BACKEND_URL=http://backend:8000
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - zenfi-network
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+
 volumes:
   postgres_dev_data:
     driver: local
