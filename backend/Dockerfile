@@ -31,4 +31,4 @@ ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
 # Run database migrations and start the application
-CMD ["sh", "-c", "until pg_isready -h $APP_DB_HOST -p $APP_DB_PORT -U $APP_DB_USER; do echo 'Waiting for postgres...'; sleep 2; done; echo 'PostgreSQL is ready'; uv run alembic upgrade head && uv run uvicorn app.api.index:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "echo 'Waiting for database...' && sleep 10 && echo 'Running migrations...' && uv run alembic upgrade head && echo 'Starting application...' && uv run uvicorn app.api.index:app --host 0.0.0.0 --port 8000"]
