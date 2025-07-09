@@ -1,5 +1,6 @@
 from typing import List
 import time
+import base64
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.settings.config import GEMINI_API_KEY
 from app.utils.tools.finance.stock_tools import (
@@ -46,6 +47,9 @@ from .prompt import (
     python_code_retry_prompt,
     tool_executor_system_instructions,
     additional_tools_decision_prompt,
+    file_processing_check_prompt,
+    file_analysis_prompt,
+    file_context_preparation_prompt,
 )
 from langgraph.graph import StateGraph, END, START
 from app.types.chat.normal import (
@@ -55,6 +59,9 @@ from app.types.chat.normal import (
     PythonExecutionResult,
     ExecutionStatus,
     AdditionalToolsNeed,
+    FileProcessingNeed,
+    FileAnalysis,
+    FileProcessingResult,
 )
 from app.types.api import ClientMessage
 from langgraph.prebuilt import ToolNode
@@ -117,9 +124,18 @@ class ChatService:
 
             tool_data_context = "Available tools can provide: stock prices, volumes, market cap, financial ratios, historical data, income statements, options data, and web search capabilities."
 
+            # Get file context from state
+            file_context = state.get("file_context", "")
+
+            print(
+                f"-------------------File Context in Python Decision: {len(file_context)} chars-------------------"
+            )
+
             structured_llm = self.llm.with_structured_output(PythonSearchNeed)
             formatted_prompt = python_code_needed_decision_prompt.format(
-                user_query=last_message.content, tool_data_context=tool_data_context
+                user_query=last_message.content,
+                file_context=file_context,
+                tool_data_context=tool_data_context,
             )
             response: PythonSearchNeed = await structured_llm.ainvoke(
                 [
@@ -163,9 +179,21 @@ class ChatService:
             tool_data_result = await self.fetch_tool_data_for_python(state)
             tool_data = tool_data_result.get("tool_data_for_python", "")
 
+            # Get file context from state
+            file_context = state.get("file_context", "")
+
+            print(
+                f"-------------------File Context in Python Generation: {len(file_context)} chars-------------------"
+            )
+            print(
+                f"-------------------File Context Preview: {file_context[:150]}...-------------------"
+            )
+
             structured_llm = self.llm.with_structured_output(PythonCode)
             formatted_prompt = python_code_generation_prompt.format(
-                user_query=last_message.content, tool_data=tool_data
+                user_query=last_message.content,
+                file_context=file_context,
+                tool_data=tool_data,
             )
 
             response = await structured_llm.ainvoke(
@@ -222,9 +250,13 @@ class ChatService:
                 tool_data_result = await self.fetch_tool_data_for_python(state)
                 tool_data = tool_data_result.get("tool_data_for_python", "")
 
+            # Get file context from state
+            file_context = state.get("file_context", "")
+
             structured_llm = self.llm.with_structured_output(PythonCode)
             formatted_prompt = python_code_retry_prompt.format(
                 user_query=last_message.content,
+                file_context=file_context,
                 previous_code=previous_code,
                 previous_error=previous_error,
                 tool_data=tool_data,
@@ -257,6 +289,59 @@ class ChatService:
                 "python_retry_count": state.get("python_retry_count", 0) + 1,
             }
 
+    def _validate_python_syntax(self, code: str) -> tuple[bool, str]:
+        """Validate Python code syntax and check for common string literal errors."""
+        try:
+            # Basic syntax check using compile
+            compile(code, "<string>", "exec")
+
+            # Additional checks for common string literal issues
+            lines = code.split("\n")
+            in_triple_double = False
+            in_triple_single = False
+
+            for i, line in enumerate(lines, 1):
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+
+                # Check for triple quotes (multi-line strings)
+                if '"""' in stripped:
+                    triple_count = stripped.count('"""')
+                    if triple_count % 2 == 1:
+                        in_triple_double = not in_triple_double
+
+                if "'''" in stripped:
+                    triple_count = stripped.count("'''")
+                    if triple_count % 2 == 1:
+                        in_triple_single = not in_triple_single
+
+                # Skip quote checking if we're inside a triple-quoted string
+                if in_triple_double or in_triple_single:
+                    continue
+
+                # Check for unmatched single and double quotes (excluding triple quotes)
+                line_without_triple = stripped.replace('"""', "").replace("'''", "")
+
+                single_quotes = line_without_triple.count(
+                    "'"
+                ) - line_without_triple.count("\\'")
+                double_quotes = line_without_triple.count(
+                    '"'
+                ) - line_without_triple.count('\\"')
+
+                if single_quotes % 2 != 0:
+                    return False, f"Line {i}: Unterminated single quote in: {line}"
+                if double_quotes % 2 != 0:
+                    return False, f"Line {i}: Unterminated double quote in: {line}"
+
+            return True, ""
+
+        except SyntaxError as e:
+            return False, f"Syntax Error: {str(e)}"
+        except Exception as e:
+            return False, f"Validation Error: {str(e)}"
+
     async def execute_python_code(self, state: AppState):
         try:
             python_code = state.get("python_code")
@@ -266,6 +351,18 @@ class ChatService:
                     "execution_result": PythonExecutionResult(
                         status=ExecutionStatus.ERROR, error="No code provided"
                     )
+                }
+
+            # Validate syntax before execution
+            is_valid, validation_error = self._validate_python_syntax(python_code)
+            if not is_valid:
+                print(f"LOG: Python code validation failed: {validation_error}")
+                return {
+                    "execution_result": PythonExecutionResult(
+                        status=ExecutionStatus.ERROR,
+                        error=f"Syntax validation failed: {validation_error}",
+                    ),
+                    "previous_python_error": validation_error,
                 }
 
             start_time = time.time()
@@ -404,9 +501,11 @@ class ChatService:
         python_code = state.get("python_code", "")
         python_execution_result = state.get("execution_result", "")
         tools_response_content = tools_response.content if tools_response else ""
+        file_context = state.get("file_context", "")
 
         formatted_system_prompt = SYSTEM_INSTRUCTIONS.format(
             user_query=last_message.content,
+            file_context=file_context,
             python_code=python_code,
             python_execution_result=python_execution_result,
             tools_response=tools_response_content,
@@ -445,9 +544,11 @@ class ChatService:
         python_code = state.get("python_code", "")
         python_execution_result = state.get("execution_result", "")
         tools_response_content = tools_response.content if tools_response else ""
+        file_context = state.get("file_context", "")
 
         formatted_system_prompt = SYSTEM_INSTRUCTIONS.format(
             user_query=last_message.content,
+            file_context=file_context,
             python_code=python_code,
             python_execution_result=python_execution_result,
             tools_response=tools_response_content,
@@ -612,6 +713,10 @@ class ChatService:
 
         # Add all nodes
         builder.add_node("call_model", self.call_model)
+        builder.add_node(
+            "check_file_processing_needed", self.check_file_processing_needed
+        )
+        builder.add_node("process_files", self.process_files)
         builder.add_node("check_python_code_needed", self.check_python_code_needed)
         builder.add_node("generate_python_code", self.generate_python_code)
         builder.add_node("regenerate_python_code", self.regenerate_python_code)
@@ -624,8 +729,21 @@ class ChatService:
         )
         builder.add_node("final_response", self.final_response)
 
-        # Start with python code check
-        builder.add_edge(START, "check_python_code_needed")
+        # Start with file processing check
+        builder.add_edge(START, "check_file_processing_needed")
+
+        # File processing flow
+        builder.add_conditional_edges(
+            "check_file_processing_needed",
+            self.should_process_files,
+            {
+                "process_files": "process_files",
+                "check_python_code_needed": "check_python_code_needed",
+            },
+        )
+
+        # After file processing, go to python check
+        builder.add_edge("process_files", "check_python_code_needed")
 
         def after_python_check(state):
             return (
@@ -768,8 +886,19 @@ class ChatService:
             self.build_graph(checkpointer=None)
             state = AppState(
                 messages=langchain_messages,
+                has_files=False,
+                file_processing_result=None,
+                file_context="",
+                needs_python_code=False,
+                python_code=None,
+                execution_result=None,
+                python_retry_count=0,
+                max_python_retries=4,
+                previous_python_error=None,
                 tool_retry_count=0,
                 max_tool_retries=3,
+                needs_additional_tools=False,
+                tool_data_for_python="",
             )
             last_yielded_content = None
             async for chunk in self.graph.astream_events(state):
@@ -944,3 +1073,298 @@ class ChatService:
             return len(numbers) > 0
         except Exception:
             return False
+
+    async def check_file_processing_needed(self, state: AppState):
+        """Check if the user message contains files that need processing."""
+        print("----------------Checking if File Processing is Needed----------------")
+        try:
+            last_message = next(
+                (
+                    msg
+                    for msg in reversed(state["messages"])
+                    if isinstance(msg, HumanMessage)
+                ),
+                None,
+            )
+            if last_message is None:
+                return {"has_files": False}
+
+            # Check if the message content contains files
+            has_files = False
+            if isinstance(last_message.content, list):
+                for content_item in last_message.content:
+                    if (
+                        isinstance(content_item, dict)
+                        and content_item.get("type") == "file"
+                    ):
+                        has_files = True
+                        break
+
+            # You could also use LLM to make this decision more sophisticated
+            if not has_files:
+                # Also check using LLM for more complex cases
+                user_message_text = ""
+                if isinstance(last_message.content, list):
+                    for content_item in last_message.content:
+                        if (
+                            isinstance(content_item, dict)
+                            and content_item.get("type") == "text"
+                        ):
+                            user_message_text = content_item.get("text", "")
+                            break
+                elif isinstance(last_message.content, str):
+                    user_message_text = last_message.content
+
+                structured_llm = self.llm.with_structured_output(FileProcessingNeed)
+                formatted_prompt = file_processing_check_prompt.format(
+                    user_message=user_message_text
+                )
+
+                response = await structured_llm.ainvoke(
+                    [
+                        SystemMessage(content=formatted_prompt),
+                        HumanMessage(content="Check if files need processing"),
+                    ]
+                )
+
+                has_files = getattr(response, "has_files", False)
+
+            print(
+                f"-------------------File Processing Needed: {has_files}-------------------"
+            )
+            return {"has_files": has_files}
+
+        except Exception as e:
+            print(f"Error in check_file_processing_needed: {e}")
+            return {"has_files": False}
+
+    async def process_files(self, state: AppState):
+        """Process uploaded files and extract content and insights."""
+        print("----------------Processing Files----------------")
+        try:
+            last_message = next(
+                (
+                    msg
+                    for msg in reversed(state["messages"])
+                    if isinstance(msg, HumanMessage)
+                ),
+                None,
+            )
+            if last_message is None:
+                return {
+                    "file_processing_result": FileProcessingResult(
+                        status=ExecutionStatus.ERROR, error="No message found"
+                    )
+                }
+
+            analyses = []
+
+            if isinstance(last_message.content, list):
+                for content_item in last_message.content:
+                    if (
+                        isinstance(content_item, dict)
+                        and content_item.get("type") == "file"
+                    ):
+                        try:
+                            analysis = await self._analyze_single_file(content_item)
+                            if analysis:
+                                analyses.append(analysis)
+                        except Exception as e:
+                            print(f"Error processing file: {e}")
+                            continue
+
+            if not analyses:
+                return {
+                    "file_processing_result": FileProcessingResult(
+                        status=ExecutionStatus.SUCCESS, analyses=[]
+                    )
+                }
+
+            # Create context for the user query
+            user_query = ""
+            if isinstance(last_message.content, list):
+                for content_item in last_message.content:
+                    if (
+                        isinstance(content_item, dict)
+                        and content_item.get("type") == "text"
+                    ):
+                        user_query = content_item.get("text", "")
+                        break
+            elif isinstance(last_message.content, str):
+                user_query = last_message.content
+
+            context = await self._prepare_file_context(user_query, analyses)
+
+            result = FileProcessingResult(
+                status=ExecutionStatus.SUCCESS,
+                analyses=analyses,
+                context_for_query=context,
+            )
+
+            print(
+                f"-------------------File Processing Complete: {len(analyses)} files processed-------------------"
+            )
+            print(
+                f"-------------------Generated File Context Length: {len(context)}-------------------"
+            )
+            print(
+                f"-------------------File Context Preview: {context[:200]}...-------------------"
+            )
+            return {"file_processing_result": result, "file_context": context}
+
+        except Exception as e:
+            print(f"Error in process_files: {e}")
+            return {
+                "file_processing_result": FileProcessingResult(
+                    status=ExecutionStatus.ERROR, error=str(e)
+                )
+            }
+
+    async def _analyze_single_file(self, file_content):
+        """Analyze a single file and extract insights."""
+        try:
+            mime_type = file_content.get("mime_type", "")
+            data = file_content.get("data", "")
+
+            # Determine file type
+            file_type = "unknown"
+            if mime_type == "application/pdf":
+                file_type = "pdf"
+            elif mime_type.startswith("image/"):
+                file_type = "image"
+            elif mime_type == "text/csv":
+                file_type = "csv"
+            elif mime_type == "text/plain":
+                file_type = "text"
+
+            # For now, we'll pass the base64 data directly to the LLM
+            # In a production environment, you might want to decode and process files differently
+            structured_llm = self.llm.with_structured_output(FileAnalysis)
+            formatted_prompt = file_analysis_prompt.format(
+                file_type=file_type,
+                media_type=mime_type,
+                filename="uploaded_file",
+                file_content=f"[Base64 encoded {file_type} file data]",
+            )
+
+            # For files that can be processed directly by the LLM (like images and PDFs),
+            # we include them in the content
+            if file_type == "image":
+                response = await structured_llm.ainvoke(
+                    [
+                        SystemMessage(content=formatted_prompt),
+                        HumanMessage(
+                            content=[
+                                {"type": "text", "text": "Analyze this file"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:{mime_type};base64,{data}"
+                                    },
+                                },
+                            ]
+                        ),
+                    ]
+                )
+            elif file_type == "pdf":
+                # For PDFs, pass the base64 data directly to the LLM as it can process PDFs
+                response = await structured_llm.ainvoke(
+                    [
+                        SystemMessage(content=formatted_prompt),
+                        HumanMessage(
+                            content=[
+                                {
+                                    "type": "text",
+                                    "text": "Analyze this PDF file and extract all financial data, numbers, and text content",
+                                },
+                                {
+                                    "type": "file",
+                                    "source_type": "base64",
+                                    "mime_type": mime_type,
+                                    "data": data,
+                                },
+                            ]
+                        ),
+                    ]
+                )
+            else:
+                # For other file types, we need to decode and process them
+                if file_type == "text" or file_type == "csv":
+                    try:
+                        decoded_content = base64.b64decode(data).decode("utf-8")
+                        formatted_prompt = file_analysis_prompt.format(
+                            file_type=file_type,
+                            media_type=mime_type,
+                            filename="uploaded_file",
+                            file_content=decoded_content,
+                        )
+                    except Exception as e:
+                        print(f"Error decoding file: {e}")
+                        formatted_prompt = file_analysis_prompt.format(
+                            file_type=file_type,
+                            media_type=mime_type,
+                            filename="uploaded_file",
+                            file_content="[Unable to decode file content]",
+                        )
+
+                response = await structured_llm.ainvoke(
+                    [
+                        SystemMessage(content=formatted_prompt),
+                        HumanMessage(content="Analyze this file content"),
+                    ]
+                )
+
+            return response
+
+        except Exception as e:
+            print(f"Error in _analyze_single_file: {e}")
+            return None
+
+    async def _prepare_file_context(self, user_query, analyses):
+        """Prepare formatted context from file analyses."""
+        try:
+            if not analyses:
+                return ""
+
+            # Format analyses for context preparation
+            formatted_analyses = []
+            for i, analysis in enumerate(analyses):
+                formatted_analysis = f"""
+File {i + 1} ({analysis.file_type}):
+- Summary: {analysis.content_summary}
+- Key Data: {analysis.key_data or "None"}
+- Insights: {analysis.insights or "None"}
+- Extracted Text: {analysis.extracted_text or "None"}
+"""
+                formatted_analyses.append(formatted_analysis)
+
+            analyses_text = "\n".join(formatted_analyses)
+
+            # Use LLM to create contextual summary
+            formatted_prompt = file_context_preparation_prompt.format(
+                user_query=user_query, file_analyses=analyses_text
+            )
+
+            response = await self.llm.ainvoke(
+                [
+                    SystemMessage(content=formatted_prompt),
+                    HumanMessage(content="Prepare context for the user query"),
+                ]
+            )
+
+            return response.content
+
+        except Exception as e:
+            print(f"Error in _prepare_file_context: {e}")
+            return ""
+
+    def should_process_files(self, state: AppState) -> str:
+        """Determine if files should be processed or skip to python check."""
+        has_files = state.get("has_files", False)
+
+        if has_files:
+            print("LOG: Files detected, processing files")
+            return "process_files"
+
+        print("LOG: No files detected, checking python code needs")
+        return "check_python_code_needed"

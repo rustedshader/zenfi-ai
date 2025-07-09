@@ -72,9 +72,47 @@ class PythonExecutionResult(BaseModel):
     )
 
 
+# File Processing Models
+class FileProcessingNeed(BaseModel):
+    has_files: Optional[bool] = Field(
+        default=False,
+        description="Whether the user message contains files that need processing.",
+    )
+
+
+class FileAnalysis(BaseModel):
+    file_type: str = Field(description="Type of file (pdf, image, csv, text)")
+    content_summary: str = Field(description="Summary of the file content")
+    key_data: Optional[str] = Field(
+        None, description="Key data extracted from the file"
+    )
+    insights: Optional[str] = Field(
+        None, description="Important insights from the file"
+    )
+    extracted_text: Optional[str] = Field(
+        None, description="Raw text extracted from the file"
+    )
+
+
+class FileProcessingResult(BaseModel):
+    status: ExecutionStatus = Field(
+        default=ExecutionStatus.NOT_EXECUTED, description="Status of file processing"
+    )
+    analyses: List[FileAnalysis] = Field(
+        default=[], description="Analysis results for each file"
+    )
+    context_for_query: Optional[str] = Field(
+        None, description="Formatted context to be used with user query"
+    )
+    error: Optional[str] = Field(None, description="Error message if processing failed")
+
+
 # Main Application State
 class AppState(TypedDict):
     messages: Annotated[list, add_messages]
+    has_files: Optional[bool]
+    file_processing_result: Optional[FileProcessingResult]
+    file_context: Optional[str]
     needs_python_code: Optional[bool]
     python_code: Optional[str]
     execution_result: Optional[PythonExecutionResult]

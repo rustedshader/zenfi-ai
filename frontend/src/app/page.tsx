@@ -165,7 +165,7 @@ export default function Page() {
                 disabled={
                   status !== "ready" || (!input.trim() && !files?.length)
                 }
-                className="flex-shrink-0 bg-blue-600 text-white p-2 rounded-xl hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                className="flex-shrink-0 bg-orange-500 text-white p-2 rounded-xl hover:bg-orange-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
               >
                 {status === "streaming" ? (
                   <svg
