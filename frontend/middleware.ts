@@ -12,20 +12,27 @@ export function middleware(request: NextRequest) {
   const token = request.cookies.get("auth-token")?.value;
 
   // Debug logging
-  console.log(`[Middleware] Path: ${pathname}, Token exists: ${!!token}`);
+  console.log(
+    `[Middleware] Path: ${pathname}, Token exists: ${!!token}, All cookies:`,
+    request.cookies.getAll()
+  );
 
   // Check if user is authenticated
   const isAuthenticated = !!token;
 
   // If user is authenticated and trying to access auth routes, redirect to home
   if (isAuthenticated && authRoutes.includes(pathname)) {
-    console.log(`[Middleware] Redirecting authenticated user from ${pathname} to /`);
+    console.log(
+      `[Middleware] Redirecting authenticated user from ${pathname} to /`
+    );
     return NextResponse.redirect(new URL("/", request.url));
   }
 
   // If user is not authenticated and trying to access protected routes, redirect to login
   if (!isAuthenticated && protectedRoutes.includes(pathname)) {
-    console.log(`[Middleware] Redirecting unauthenticated user from ${pathname} to /login`);
+    console.log(
+      `[Middleware] Redirecting unauthenticated user from ${pathname} to /login`
+    );
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
@@ -35,9 +42,9 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except API routes, static files, and images
-     */
-    '/((?!api|_next/static|_next/image|favicon.ico).*)',
+    "/",
+    "/login",
+    "/signup",
+    "/((?!api|_next/static|_next/image|.*\\.png$).*)",
   ],
 };

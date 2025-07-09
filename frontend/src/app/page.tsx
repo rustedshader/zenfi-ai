@@ -5,6 +5,7 @@ import { Message } from "@/components/message";
 import { FileAttachment } from "@/components/file-attachment";
 import { Navbar } from "@/components/navbar";
 import { useAuth } from "@/contexts/AuthContext";
+import { useRouter } from "next/navigation";
 /* eslint-disable @next/next/no-img-element */
 import { useChat } from "@ai-sdk/react";
 import { TextStreamChatTransport } from "ai";
@@ -12,6 +13,7 @@ import { useRef, useState, useEffect } from "react";
 
 export default function Page() {
   const { isAuthenticated, isLoading } = useAuth();
+  const router = useRouter();
   const [input, setInput] = useState("");
   const { messages, sendMessage, status } = useChat({
     transport: new TextStreamChatTransport({
@@ -27,6 +29,14 @@ export default function Page() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Redirect to login if not authenticated (fallback to middleware)
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      console.log("[Page] Not authenticated, redirecting to /login");
+      router.push("/login");
+    }
+  }, [isLoading, isAuthenticated, router]);
 
   if (isLoading) {
     return (
