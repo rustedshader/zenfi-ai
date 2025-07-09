@@ -1,27 +1,3 @@
-"""
-Enhanced Python Code Generation with Tool Data Integration
-
-This module now supports feeding real financial data from tools into Python code generation,
-enabling more accurate and realistic analysis. The system works as follows:
-
-1. When Python code is needed, the system first fetches relevant financial data using available tools
-2. This data is then formatted and passed to the Python code generation prompt
-3. The generated Python code uses real financial data instead of mock data
-4. This enables more accurate calculations, analysis, and modeling
-
-Example workflow:
-- User asks: "Calculate the P/E ratio for RELIANCE.NS and compare it with industry average"
-- System fetches: stock price, market cap, shares outstanding, earnings data
-- Python code generates: Uses real data to calculate P/E ratio and perform comparison
-- Result: Accurate analysis based on current market data
-
-Key improvements:
-- Real data integration instead of mock data
-- Better analysis accuracy
-- More relevant Python code generation
-- Enhanced decision making for when Python code is needed
-"""
-
 from typing import List
 import time
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -124,6 +100,9 @@ class ChatService:
         self.llm_with_tools = self.llm.bind_tools(self.tools)
 
     async def check_python_code_needed(self, state: AppState):
+        print(
+            "----------------Checking if Python code generation is needed------------"
+        )
         try:
             last_message = next(
                 (
@@ -135,9 +114,7 @@ class ChatService:
             )
             if last_message is None:
                 raise ValueError("No HumanMessage found in messages.")
-            print("LOG: Last message content:", last_message.content)
 
-            # Get some context about available tools and data for decision making
             tool_data_context = "Available tools can provide: stock prices, volumes, market cap, financial ratios, historical data, income statements, options data, and web search capabilities."
 
             structured_llm = self.llm.with_structured_output(PythonSearchNeed)
@@ -150,7 +127,9 @@ class ChatService:
                     HumanMessage(content="Does Python Code Generation needed ? "),
                 ]
             )
-            print("LOG:", response.needs_python_code)
+            print("-------------------Python Code Needed Check-------------------")
+            print(response.needs_python_code)
+            print("-----------------------------------------------------")
 
             needs_python_code = getattr(response, "needs_python_code", False)
 
@@ -167,7 +146,7 @@ class ChatService:
             return {"needs_python_code": False, "python_subgraph_state": None}
 
     async def generate_python_code(self, state: AppState):
-        print("LOG: Generating Python Code...")
+        print("---------------Generating Python Code---------------")
         try:
             last_message = next(
                 (
@@ -197,7 +176,9 @@ class ChatService:
             )
 
             python_code = getattr(response, "code", None)
-            print("LOG: Generated Python Code:", python_code)
+            print("-----------------------Python Code------------------")
+            print(python_code)
+            print("-----------------------------------------------------")
 
             return {
                 "python_code": python_code,
@@ -216,7 +197,9 @@ class ChatService:
             }
 
     async def regenerate_python_code(self, state: AppState):
-        print("LOG: Regenerating Python Code with error context...")
+        print(
+            "--------------- Regenerating Python Code with Error Context ------------"
+        )
         try:
             last_message = next(
                 (
@@ -296,7 +279,9 @@ class ChatService:
             result = await sandbox.execute(python_code)
             execution_time = time.time() - start_time
 
-            print("LOG: Python code execution result:", result)
+            print("---------------PYTHON CODE EXECUTION RESULT---------------")
+            print(result)
+            print("----------------------------------------------------------")
 
             if hasattr(result, "status") and result.status == "error":
                 error_message = (
@@ -478,7 +463,9 @@ class ChatService:
     async def check_additional_tools_needed(self, state: AppState):
         """Check if additional tool calls are needed based on current tool responses and AI response."""
         try:
-            print("LOG: Checking if additional tools are needed...")
+            print(
+                "---------------Checking if Additional Tools are Needed---------------"
+            )
 
             last_message = next(
                 (
@@ -543,8 +530,12 @@ class ChatService:
             needs_additional_tools = getattr(response, "needs_additional_tools", False)
             reasoning = getattr(response, "reasoning", "No reasoning provided")
 
-            print(f"LOG: Additional tools needed: {needs_additional_tools}")
-            print(f"LOG: Reasoning: {reasoning}")
+            print("-------------------Additional Tools Needed--------------------")
+            print(needs_additional_tools)
+            print("-----------------------------------------------------")
+            print("----------Additional Tools Reasoning----------")
+            print(reasoning)
+            print("-----------------------------------------------------")
 
             return {
                 "needs_additional_tools": needs_additional_tools,
@@ -558,9 +549,7 @@ class ChatService:
         """Determine if we should call tools again or finish."""
         needs_additional_tools = state.get("needs_additional_tools", False)
         tool_retry_count = state.get("tool_retry_count", 0)
-        max_tool_retries = state.get(
-            "max_tool_retries", 2
-        )  # Default max 2 additional tool calls
+        max_tool_retries = state.get("max_tool_retries", 3)
 
         print(
             f"LOG: Tool retry check - Needs additional: {needs_additional_tools}, "
@@ -575,8 +564,7 @@ class ChatService:
         return "finish"
 
     async def call_tools_retry(self, state: AppState):
-        """Call tools again with updated context for additional information."""
-        print("LOG: Calling tools again for additional information...")
+        print("----------------Calling Tools Retry----------------")
 
         messages = state["messages"]
         last_message = next(
@@ -779,7 +767,7 @@ class ChatService:
             state = AppState(
                 messages=langchain_messages,
                 tool_retry_count=0,
-                max_tool_retries=2,  # Allow up to 2 additional tool calls
+                max_tool_retries=3,
             )
             last_yielded_content = None
             async for chunk in self.graph.astream_events(state):
@@ -797,8 +785,7 @@ class ChatService:
                                     last_yielded_content = content
 
     async def fetch_tool_data_for_python(self, state: AppState):
-        """Fetch tool data that can be used in Python code generation for better analysis."""
-        print("LOG: Fetching tool data for Python code generation...")
+        print("-----------------Fetching Tool Data for Python-----------------")
         try:
             last_message = next(
                 (
