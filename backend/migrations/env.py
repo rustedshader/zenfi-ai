@@ -1,4 +1,5 @@
 from logging.config import fileConfig
+import os
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -26,6 +27,22 @@ target_metadata = SQLModel.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
+
+
+# Create database URL from environment variables
+def get_database_url():
+    db_user = os.environ.get("APP_DB_USER", "postgres")
+    password = os.environ.get("APP_DB_PASS", "mysecretpassword")
+    host = os.environ.get("APP_INSTANCE_HOST", "localhost")
+    port = os.environ.get("APP_DB_PORT", "5432")
+    database = os.environ.get("APP_DB_NAME", "postgres")
+
+    return f"postgresql://{db_user}:{password}@{host}:{port}/{database}"
+
+
+# Set the database URL from environment variables
+database_url = get_database_url()
+config.set_main_option("sqlalchemy.url", database_url)
 
 
 def run_migrations_offline() -> None:

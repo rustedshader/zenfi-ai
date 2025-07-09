@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: zenfi-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zenfi
+      POSTGRES_PASSWORD: zenfi_password
+      POSTGRES_DB: zenfi_db
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - zenfi-network
+
+  # Backend API Service (Development)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: zenfi-backend-dev
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://zenfi:zenfi_password@postgres:5432/zenfi_db
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - ENVIRONMENT=development
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+    networks:
+      - zenfi-network
+    volumes:
+      - ./backend:/app
+    command: ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.api.index:app --host 0.0.0.0 --port 8000 --reload"]
+
+volumes:
+  postgres_dev_data:
+    driver: local
+
+networks:
+  zenfi-network:
+    driver: bridge

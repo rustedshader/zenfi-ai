@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: zenfi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zenfi
+      POSTGRES_PASSWORD: zenfi_password
+      POSTGRES_DB: zenfi_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - zenfi-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zenfi -d zenfi_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: zenfi-backend
+    restart: unless-stopped
+    environment:
+      - APP_DB_USER=zenfi
+      - APP_DB_PASS=zenfi_password
+      - APP_INSTANCE_HOST=postgres
+      - APP_DB_PORT=5432
+      - APP_DB_NAME=zenfi_db
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - zenfi-network
+    volumes:
+      - ./backend:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: zenfi-frontend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - BACKEND_URL=http://backend:8000
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - zenfi-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  zenfi-network:
+    driver: bridge

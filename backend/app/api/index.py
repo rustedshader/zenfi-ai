@@ -27,3 +27,9 @@ app.add_middleware(
 
 app.include_router(auth_router, prefix="/api", tags=["Authentication"])
 app.include_router(chat_router, prefix="/api", tags=["Chat"])
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Docker container monitoring."""
+    return {"status": "healthy", "message": "ZenFi AI Backend is running"}
