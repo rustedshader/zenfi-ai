@@ -1,5 +1,11 @@
 # Zenfi AI
 
+## 🌐 Visit Us
+
+Explore more about Zenfi AI.
+
+[https://zenfi.in](https://zenfi.in)
+
 🤖 **Advanced AI Financial Assistant for Smart Investment Decisions**
 
 Zenfi AI is a sophisticated financial AI assistant that combines real-time market data, portfolio management, and intelligent analysis to help users make informed investment decisions. Built with modern technologies and powered by advanced AI models, Zenfi AI provides comprehensive financial insights and personalized recommendations.

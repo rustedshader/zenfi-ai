@@ -63,7 +63,10 @@ export default function Page() {
         {messages.length === 0 ? (
           <div className="flex items-center justify-center min-h-full pb-24">
             <div className="max-w-2xl mx-auto p-6">
-              <Card type="chat-attachments" />
+              <Card
+                type="chat-attachments"
+                onQuerySelect={(query) => setInput(query)}
+              />
             </div>
           </div>
         ) : (
@@ -121,6 +124,32 @@ export default function Page() {
               </div>
             </div>
           )}
+
+          {/* Disclaimer for advanced queries */}
+          <div className="px-4 py-3 bg-amber-50 border-b border-amber-200 rounded-t-2xl">
+            <div className="flex items-start gap-2">
+              <svg
+                className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"
+                />
+              </svg>
+              <p className="text-sm text-amber-800">
+                <strong>Advanced Analysis Notice:</strong> Complex queries like
+                comprehensive financial analysis, backtesting strategies, or
+                multi-step calculations may take up to 10 minutes to complete.
+                Please be patient while the system processes your request - the
+                spinning circle indicates work in progress.
+              </p>
+            </div>
+          </div>
 
           <div className="p-4">
             <div className="flex items-end gap-3">
