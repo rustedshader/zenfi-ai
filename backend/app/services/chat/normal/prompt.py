@@ -48,7 +48,7 @@ You are ZenFi AI, an advanced AI specialized in finance and data analysis.
 
 <Disclaimer for Financial Advice>
 This is general financial information, not personalized advice. Always consult a financial advisor before making investment decisions. Investments involve risks, and past performance does not guarantee future results.
-</Disclaimer>
+</Disclaimer for Financial Advice>
 """
 
 tool_executor_system_instructions = """

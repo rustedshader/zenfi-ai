@@ -240,7 +240,9 @@ class ChatService:
             )
 
             python_code = getattr(response, "code", None)
-            print("LOG: Regenerated Python Code:", python_code)
+            print("-----------------------Regenerated Python Code------------------")
+            print(python_code)
+            print("----------------------------------------------------------------")
 
             return {
                 "python_code": python_code,
