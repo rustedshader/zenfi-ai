@@ -5,7 +5,7 @@ import { ReactNode } from "react";
 const Code = ({ children }: { children: ReactNode }) => {
   return (
     <code
-      className={`${GeistMono.className} text-xs bg-zinc-100 p-1 rounded-md border`}
+      className={`${GeistMono.className} text-xs bg-gray-100 text-red-600 px-2 py-1 rounded border`}
     >
       {children}
     </code>
@@ -73,12 +73,12 @@ export const Card = ({ type }: { type: string }) => {
       </div>
     </div>
   ) : type === "chat-attachments" ? (
-    <div className="self-center w-full fixed top-14 px-8 py-6">
-      <div className="p-4 border rounded-lg flex flex-col gap-2 w-full">
-        <div className="text font-semibold text-zinc-800">
+    <div className="w-full max-w-lg mx-auto">
+      <div className="p-6 border border-gray-200 rounded-xl bg-white shadow-sm flex flex-col gap-4">
+        <div className="text-lg font-semibold text-gray-800">
           Stream Chat Completions with Attachments
         </div>
-        <div className="text-zinc-500 text-sm leading-6 flex flex-col gap-4">
+        <div className="text-gray-600 text-sm leading-6 flex flex-col gap-4">
           <p>
             The <Code>useChat</Code> hook can be integrated with a Python
             FastAPI backend to stream chat completions in real-time. To make
@@ -89,7 +89,7 @@ export const Card = ({ type }: { type: string }) => {
           <p>
             Furthermore, you can send files along with your messages by setting{" "}
             <Code>experimental_attachments</Code> to <Code>true</Code> in{" "}
-            <Code>handleSubmit</Code>. This will allow you to use process these
+            <Code>handleSubmit</Code>. This will allow you to process these
             attachments in your FastAPI backend.
           </p>
         </div>
