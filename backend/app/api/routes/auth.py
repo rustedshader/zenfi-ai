@@ -111,3 +111,14 @@ async def login(user: UserLogin, db: AsyncSession = Depends(get_db)):
             await db.rollback()
             raise HTTPException(status_code=500, detail=f"Failed to login: {str(e)}")
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@auth_router.get("/me")
+async def get_me(current_user: User = Depends(get_current_user)):
+    """Get current user information."""
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email,
+        "created_at": current_user.created_at.isoformat(),
+    }

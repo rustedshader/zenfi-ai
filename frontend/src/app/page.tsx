@@ -3,12 +3,15 @@
 import { Card } from "@/components/card";
 import { Message } from "@/components/message";
 import { FileAttachment } from "@/components/file-attachment";
+import { Navbar } from "@/components/navbar";
+import { useAuth } from "@/contexts/AuthContext";
 /* eslint-disable @next/next/no-img-element */
 import { useChat } from "@ai-sdk/react";
 import { TextStreamChatTransport } from "ai";
 import { useRef, useState, useEffect } from "react";
 
 export default function Page() {
+  const { isAuthenticated, isLoading } = useAuth();
   const [input, setInput] = useState("");
   const { messages, sendMessage, status } = useChat({
     transport: new TextStreamChatTransport({
@@ -25,8 +28,25 @@ export default function Page() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  if (isLoading) {
+    return (
+      <div className="flex flex-col min-h-screen bg-white">
+        <Navbar />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500"></div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    // This should be handled by middleware, but just in case
+    return null;
+  }
+
   return (
     <div className="flex flex-col min-h-screen bg-white">
+      <Navbar />
       <div className="flex-1 overflow-y-auto">
         {messages.length === 0 ? (
           <div className="flex items-center justify-center min-h-full pb-24">
